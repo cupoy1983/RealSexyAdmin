@@ -46,7 +46,7 @@
       "nicknamePlaceholder": "请输入昵称",
       "nicknameRequired": "请输入昵称"
     },
-    "shareDefaultTitle": "FastapiAdmin - 高效的企业管理移动平台",
+    "shareDefaultTitle": "RealSexyAdmin - 高效的企业管理移动平台",
     "subscribeTitle": "开启消息通知",
     "subscribeContent": "您已关闭消息通知，是否前往设置开启？",
     "subscribeGoSetting": "去设置",
@@ -170,7 +170,7 @@
     "pendingTickets": "待处理工单",
     "processingTickets": "处理中工单",
     "doneTickets": "已完成工单",
-    "shareTitle": "{name} 邀请你加入 FastapiAdmin",
+    "shareTitle": "{name} 邀请你加入 RealSexyAdmin",
     "roleFallback": "超级管理员 · 技术部"
   },
   "profile": {
@@ -237,7 +237,7 @@
   },
   "chat": {
     "title": "AI 助手",
-    "shareTitle": "FastapiAdmin AI 助手 - 智能对话，随时答疑",
+    "shareTitle": "RealSexyAdmin AI 助手 - 智能对话，随时答疑",
     "sessionList": "会话列表",
     "new": "新建",
     "newSession": "新对话",
@@ -251,7 +251,7 @@
     "sessionId": "会话 {id}",
     "noReply": "（无回复内容）",
     "requestFailed": "请求失败，请稍后重试。",
-    "welcome": "你好！我是 FastapiAdmin AI 助手，有什么可以帮助你的？",
+    "welcome": "你好！我是 RealSexyAdmin AI 助手，有什么可以帮助你的？",
     "empty": "暂无会话，点击右上角新建",
     "loadMore": "加载更早消息（{count} 条）",
     "inputPlaceholder": "输入消息...",
@@ -316,8 +316,8 @@
   },
   "index": {
     "navTitle": "工作台概览",
-    "shareTitle": "{greeting}！{name} 邀你使用 FastapiAdmin",
-    "welcomeDefault": "欢迎使用 FastapiAdmin",
+    "shareTitle": "{greeting}！{name} 邀你使用 RealSexyAdmin",
+    "welcomeDefault": "欢迎使用 RealSexyAdmin",
     "today": "今日",
     "welcomeBack": "欢迎回来，开启高效的一天",
     "overview": "数据概览",
@@ -356,10 +356,10 @@
   },
   "work": {
     "navTitle": "工作台",
-    "shareTitle": "FastapiAdmin 工作台 - 通知公告 / 工单管理 / AI 助手",
+    "shareTitle": "RealSexyAdmin 工作台 - 通知公告 / 工单管理 / AI 助手",
     "businessCenter": "业务中心",
     "devTools": "开发者工具",
-    "nameFallback": "FastapiAdmin",
+    "nameFallback": "RealSexyAdmin",
     "roleFallback": "超级管理员",
     "searchPlaceholder": "搜索模块功能",
     "emptyTip": "未找到相关模块，换个关键词试试"

@@ -4,7 +4,7 @@ editLink: true
 lastUpdated: true
 
 hero:
-  name: "FastApiAdmin"
+  name: "RealSexyAdmin"
   text: "Web · H5 · 小程序,一套全栈"
   tagline: 基于 FastAPI + Vue3 + TypeScript,前后端类型共享。200+ REST 接口开箱即用,AI 代码生成器选表即出全栈 CRUD,Docker Compose 一条命令上线。
   image:

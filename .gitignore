@@ -58,6 +58,12 @@ docker/nginx/web/dist
 docker/nginx/ssl/*
 !docker/nginx/ssl/.gitkeep
 
+docker/mysql/data/*
+!docker/mysql/data/.gitkeep
+
+docker/redis/data/*
+!docker/redis/data/.gitkeep
+
 frontend/web/.env
 frontend/web/.env.development
 frontend/web/.env.production
