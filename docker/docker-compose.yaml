@@ -117,6 +117,12 @@ services:
       # 信任反向代理（nginx）传来的 X-Forwarded-Proto/For：否则 prod 的
       # HTTPSRedirectMiddleware 会把 https 请求误判为 http 造成 301 循环
       FORWARDED_ALLOW_IPS: "*"
+      # 钉钉账号联动与考勤月报（可选）。留空时账号联动/月报同步会直接失败并提示未配置。
+      # 同步时间不再由环境变量控制，改由系统定时任务节点调度（每月7号同步上月）。
+      # 值统一在 docker/.env 里填，不要写死在这里。
+      DINGTALK_APP_KEY: "${DINGTALK_APP_KEY:-}"
+      DINGTALK_APP_SECRET: "${DINGTALK_APP_SECRET:-}"
+      DINGTALK_AGENT_ID: "${DINGTALK_AGENT_ID:-}"
     ports:
       - "${BACKEND_PORT:-8001}:8001"
     volumes:
@@ -124,7 +130,9 @@ services:
       # 取消注释将宿主机代码覆盖容器内代码。生产环境保持注释，
       # 使用镜像内自带的代码（Dockerfile 已 COPY backend）。
       # ─────────────────────────────────────────
-      # - ../backend:/home
+      # 2026-10-26：镜像内代码已落后（无 internal 模块），且本机代理未开无法重建镜像，
+      # 故临时启用开发热更新挂载，直接用宿主机 backend 源码。
+      - ../backend:/home
       # 本地存储源根目录持久化（种子节点 host=static/upload）：
       # 必须挂载，否则每次部署重建容器会丢失用户上传的文件
       - ./backend/static/upload:/home/static/upload
@@ -202,9 +210,12 @@ services:
 volumes:
   mysql_data:
     driver: local
+    # 2026-10-26：与电商项目（RealSexyAdmin）共用同一个 MySQL 数据目录，
+    # 此处必须用绝对路径且与现存卷 docker_mysql_data 的 Options.device 完全一致，
+    # 否则 compose 会判定配置不匹配并弹出「Recreate (data will be lost)?」交互确认。
     driver_opts:
       type: none
-      device: ./mysql/data
+      device: D:\AI\Project\RealSexyAdmin\docker\mysql\data
       o: bind
   redis_data:
     driver: local

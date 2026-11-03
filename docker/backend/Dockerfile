@@ -22,5 +22,6 @@ COPY ./backend/ .
 # 暴露端口
 EXPOSE 8001
 
-# 运行应用
-CMD ["python", "main.py", "run", "--env=prod"]
+# 运行应用：环境由容器内的 ENVIRONMENT 决定（docker-compose 注入，默认 prod）
+# 使用 shell 形式以便展开环境变量，对应加载 backend/env/.env.${ENVIRONMENT}
+CMD ["sh", "-c", "python main.py run --env=${ENVIRONMENT:-prod}"]

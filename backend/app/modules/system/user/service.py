@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from fastapi import UploadFile
+from sqlalchemy import delete, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.setting import settings
@@ -101,17 +102,89 @@ class UserService:
         if await UserCRUD(self.auth, self.db).get(username=data.username):
             raise CustomException(msg="已存在相同用户名称的账号")
 
+        # 手机号是钉钉/快麦/企业微信账号匹配的唯一桥梁：新建用户必须唯一且必填
+        mobile = (data.mobile or "").strip()
+        if not mobile:
+            raise CustomException(msg="新建用户失败：手机号不能为空（外部账号按手机号匹配）")
+        if await UserCRUD(self.auth, self.db).get(mobile=mobile):
+            raise CustomException(msg="新建用户失败：该手机号已存在")
+
         if data.dept_id and not await DeptCRUD(self.auth, self.db).get(id=data.dept_id):
             raise CustomException(msg="该数据不存在")
 
         if data.password:
             data.password = await PwdUtil.ahash_password(password=data.password)
 
+        # 重新入职：软删的行仍占着 username / mobile 的唯一索引，直接 INSERT 必然 1062。
+        # 撞到就复活那条记录，而不是让它撞库 —— 撞库的报错会把整条 INSERT 语句吐给客户端。
+        revived = await self._revive_soft_deleted_user(data)
+        if revived is not None:
+            await self._set_user_roles(user_ids=[revived.id], role_ids=data.role_ids or [])
+            await self._set_user_positions(user_ids=[revived.id], position_ids=data.position_ids or [])
+            from app.plugin.module_internal.account.service import DingtalkAccountService
+
+            await DingtalkAccountService(self.auth, self.db).bind_or_create_for_new_user(oa_user_id=revived.id)
+            return await self.detail(id=revived.id)
+
         create_data = data.model_dump(exclude_none=True, exclude={"role_ids", "position_ids"})
         new_user = await UserCRUD(self.auth, self.db).create(data=create_data)
         await self._set_user_roles(user_ids=[new_user.id], role_ids=data.role_ids or [])
         await self._set_user_positions(user_ids=[new_user.id], position_ids=data.position_ids or [])
+
+        # 新建用户联动钉钉：部门未映射、手机号冲突、钉钉接口失败都会抛错，
+        # 由请求级事务回滚，最终 OA 用户也不保留。
+        from app.plugin.module_internal.account.service import DingtalkAccountService
+
+        await DingtalkAccountService(self.auth, self.db).bind_or_create_for_new_user(oa_user_id=new_user.id)
         return await self.detail(id=new_user.id)
+
+    async def _revive_soft_deleted_user(self, data: UserCreateSchema) -> UserModel | None:
+        """重新入职：把已软删的同名 / 同手机号记录复活，而不是让它撞唯一键。
+
+        软删的行还留在表里，唯一索引照样生效（实测 1062 `Duplicate entry ... for key
+        'sys_user.mobile'`）。让它撞库不只是失败：`base_crud.py` 会把 `创建失败: {e}`
+        原样抛给客户端，整条 INSERT 语句连绑定参数一起进响应体（ADR-0006 记过的泄漏路径）。
+
+        未软删的同名 / 同手机号记录在 `create()` 前面的校验里已经被拦下，
+        所以走到这里再被 SELECT 到的，一定是可以复活的软删记录。
+
+        返回:
+        - UserModel | None: 复活后的用户；没有可复活的记录则返回 None（走正常新建）
+        """
+        username = (data.username or "").strip()
+        mobile = (data.mobile or "").strip()
+        conditions = []
+        if username:
+            conditions.append(UserModel.username == username)
+        if mobile:
+            conditions.append(UserModel.mobile == mobile)
+        if not conditions:
+            return None
+
+        obj = (
+            await self.db.execute(select(UserModel).where(or_(*conditions), UserModel.is_deleted == true()))
+        ).scalars().first()
+        if obj is None:
+            return None
+
+        update_data = data.model_dump(exclude_none=True, exclude={"role_ids", "position_ids"})
+        update_data.update({"is_deleted": False, "deleted_time": None})
+        await self.db.execute(update(UserModel).where(UserModel.id == obj.id).values(**update_data))
+
+        # 被软删的钉钉绑定记录仍占着 (system_type, mobile) 唯一键，先物理清掉；
+        # 之后统一走 bind_or_create_for_new_user：钉钉里还有同手机号成员就绑，没有就建。
+        from app.plugin.module_internal.account.model import ExternalAccountBindingModel
+        from app.plugin.module_internal.account.schema import SYSTEM_DINGTALK
+
+        await self.db.execute(
+            delete(ExternalAccountBindingModel).where(
+                ExternalAccountBindingModel.oa_user_id == obj.id,
+                ExternalAccountBindingModel.system_type == SYSTEM_DINGTALK,
+            )
+        )
+        await self.db.flush()
+        logger.info(f"重新入职：复活已软删用户 id={obj.id} username={username}")
+        return obj
 
     async def update(self, id: int, data: UserUpdateSchema) -> UserOutSchema:
         if data.username:
@@ -135,10 +208,26 @@ class UserService:
             if dept.status == 1:
                 raise CustomException(msg="部门已被禁用")
 
+        old_user = await UserCRUD(self.auth, self.db).get(id=id)
+        if not old_user:
+            raise CustomException(msg="该数据不存在")
+
         update_data = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"role_ids", "position_ids"})
         await UserCRUD(self.auth, self.db).update(id=id, data=update_data)
         await self._set_user_roles(user_ids=[id], role_ids=data.role_ids or [])
         await self._set_user_positions(user_ids=[id], position_ids=data.position_ids or [])
+
+        # 已绑定钉钉的手机号变更要同步到钉钉成员资料：失败则整个修改失败，
+        # OA 手机号保持原值；不重新匹配、不换绑。
+        new_mobile = (data.mobile or "").strip() or None
+        if new_mobile and new_mobile != (old_user.mobile or "").strip():
+            from app.plugin.module_internal.account.service import DingtalkAccountService
+
+            await DingtalkAccountService(self.auth, self.db).sync_mobile_change(
+                oa_user_id=id,
+                old_mobile=old_user.mobile,
+                new_mobile=new_mobile,
+            )
 
         return await self.detail(id=id)
 
@@ -161,6 +250,13 @@ class UserService:
                 continue
         if errors:
             raise CustomException(msg="; ".join(errors))
+
+        # 删除用户联动钉钉离职（ADR-0007）。放在解关联之前：预检阶段就会抛错，
+        # 整批不动 —— 钉钉离职没有撤销动作，宁可删不掉，也不要出现「钉钉走了、OA 还在」。
+        # 没绑定钉钉的用户会被跳过，不影响删除。
+        from app.plugin.module_internal.account.service import DingtalkAccountService
+
+        await DingtalkAccountService(self.auth, self.db).dismiss_users(oa_user_ids=ids)
 
         # 先解除角色/岗位关联，再删除用户
         await UserCRUD(self.auth, self.db).set_user_roles(user_objs=users, role_objs=[])

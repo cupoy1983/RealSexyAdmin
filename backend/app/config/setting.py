@@ -157,6 +157,18 @@ class Settings(BaseSettings):
     WX_MINI_ACCESS_TOKEN_CACHE_TTL: int = 7000  # access_token Redis 缓存秒数（微信上限 7200，留 200s 余量）
 
     # ================================================= #
+    # ************* 钉钉开放平台配置（可选）************* #
+    # ================================================= #
+    # AppSecret 只在服务端使用，任何接口都不会把它下发到前端；
+    # 对外只暴露「是否已配置」，避免凭据泄漏。
+    DINGTALK_APP_KEY: str = ""  # 企业内部应用 AppKey
+    DINGTALK_APP_SECRET: str = ""  # 企业内部应用 AppSecret
+    DINGTALK_AGENT_ID: str = ""  # 微应用 AgentId
+    DINGTALK_ACCESS_TOKEN_CACHE_TTL: int = 7000  # access_token Redis 缓存秒数（钉钉上限 7200，留 200s 余量）
+    # 考勤同步不在这里配置开关/时间：改由系统定时任务节点调度（每月7号同步上月），
+    # 节点代码块只调用 app.plugin.module_internal.attendance.service 里预写的 Service。
+
+    # ================================================= #
     # ******************* 外部 HTTP（httpx）******************* #
     # ================================================= #
     HTTPX_DEFAULT_TIMEOUT: float = 10.0  # 对外 HTTP 请求默认超时（秒）
@@ -182,7 +194,7 @@ class Settings(BaseSettings):
     # ================================================= #
     # ******************* 安全中间件配置 ****************** #
     # ================================================= #
-    ALLOWED_HOSTS: list[str] = ["service.fastapiadmin.com", "*.fastapiadmin.com"]  # 允许访问的主机名列表
+    ALLOWED_HOSTS: list[str] = ["admin.realsxy.com", "*.realsxy.com", "localhost", "127.0.0.1"]  # 允许访问的主机名列表
 
     # 接口白名单（无需认证即可访问的接口路径，支持 * 开头表示前缀匹配）
     WHITE_API_LIST_PATH: list[str] = [

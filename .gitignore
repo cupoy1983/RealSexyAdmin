@@ -74,3 +74,21 @@ AGENTS.md
 .codebuddy
 .agent
 .workbuddy
+
+# 本地备份与临时验证
+.backup_*
+.tmp_*.py
+backend/tests/_tmp_*.py
+backend/env/.env*.bak*
+
+# 前端临时构建副本
+frontend/web/dist_new/
+frontend/web/dist_pkg/
+
+# 数据库运行数据，包含业务数据和密钥材料
+docker/mysql/data/
+docker/mysql/data_oa_old/
+docker/redis/data/
+
+# 本机代理无法构建镜像而添加的源码挂载配置
+docker/docker-compose.override.yaml
