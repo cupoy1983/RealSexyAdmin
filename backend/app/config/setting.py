@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # ******************* API文档配置 ****************** #
     # ================================================= #
     DEBUG: bool = True  # 调试模式
-    TITLE: str = "🎉 FastapiAdmin 🎉 "  # 文档标题
+    TITLE: str = "🎉 RealSexyAdmin 🎉 "  # 文档标题
     VERSION: str = "3.0.0"  # 版本号
     DESCRIPTION: str = "一个基于fastapi、sqlalchemy、redis实现的轻量化框架"  # 文档描述
     SUMMARY: str = "接口汇总"  # 文档概述
