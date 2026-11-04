@@ -194,7 +194,7 @@ class Settings(BaseSettings):
     # ================================================= #
     # ******************* 安全中间件配置 ****************** #
     # ================================================= #
-     ALLOWED_HOSTS: list[str] = ["service.fastapiadmin.com", "*.fastapiadmin.com"]  # 允许访问的主机名列表（生产域名）
+    ALLOWED_HOSTS: list[str] = ["admin.realsxy.com", "*.realsxy.com", "localhost", "127.0.0.1"]  # 允许访问的主机名列表
 
     # 接口白名单（无需认证即可访问的接口路径，支持 * 开头表示前缀匹配）
     WHITE_API_LIST_PATH: list[str] = [
