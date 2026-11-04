@@ -1,0 +1,74 @@
+# ============================================
+# RealSexyAdmin 生产部署（1Panel 环境）
+# ============================================
+# 适用场景：
+#   - MariaDB、Redis、OpenResty 由 1Panel 提供，本文件不再创建它们
+#   - 本文件只构建并运行 backend 一个容器
+#   - 前端为静态文件，由 1Panel 的 OpenResty 直接托管，不经过本文件
+#
+# 使用方式（在项目根的 docker 目录下执行）：
+#   docker compose -f docker-compose.prod.yaml up -d --build
+#   docker compose -f docker-compose.prod.yaml logs -f backend
+#   docker compose -f docker-compose.prod.yaml ps
+#
+# 与开发用的 docker-compose.yaml 互不影响，不要同时启动。
+# ============================================
+
+name: realsexy-oa
+
+services:
+  backend:
+    container_name: realsexy-oa-backend
+    build:
+      context: ../
+      dockerfile: ./docker/backend/Dockerfile
+      args:
+        DEPLOY_ENV: prod
+    image: "realsexy-oa-backend:${BACKEND_IMAGE_TAG:-1.0.0}"
+    restart: unless-stopped
+    # 注意：不要写 platform: linux/amd64。
+    # Armbian 是 arm64，强制 amd64 会走 qemu 模拟，构建和运行都极慢。
+    environment:
+      TZ: "Asia/Shanghai"
+      # 决定加载 backend/env/.env.prod
+      ENVIRONMENT: "prod"
+      # 数据库、Redis、钉钉等连接信息全部由 .env.prod 提供，
+      # 这里不要再写空值，否则会覆盖 .env.prod 中的配置。
+      # 前端经 OpenResty 单层反代，保留代理跳数以便取到真实客户端 IP
+      TRUSTED_PROXY_HOPS: "1"
+    ports:
+      # 只绑定宿主机回环，公网必须经 OpenResty 的 HTTPS 访问
+      - "127.0.0.1:${OA_BACKEND_PORT:-8001}:8001"
+    volumes:
+      # 用户上传文件持久化，重建容器不丢文件
+      - ../backend/static/upload:/home/static/upload
+      # 生产环境配置单独挂载：密钥不进镜像，改配置只需重启
+      - ../backend/env/.env.prod:/home/env/.env.prod:ro
+    networks:
+      - oa_net
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c 'import urllib.request; req = urllib.request.Request(\"http://localhost:8001/api/v1/monitor/health/check\", headers={\"X-Forwarded-Proto\": \"https\"}); urllib.request.urlopen(req, timeout=5)' || exit 1",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+networks:
+  # 复用 1Panel 已存在的容器网络，backend 才能用容器名访问 MariaDB / Redis。
+  # 网络名用 docker network ls 确认后，通过 OA_DOCKER_NETWORK 覆盖。
+  oa_net:
+    name: ${OA_DOCKER_NETWORK:-1panel-network}
+    external: true

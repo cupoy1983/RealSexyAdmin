@@ -56,3 +56,9 @@ LICENSE
 # 取消注释以加速构建：backend/alembic/versions
 # 用户上传文件（本地存储源根目录）不进镜像；static/image、static/swagger 是程序资源必须保留
 backend/static/upload
+
+# 真实环境配置不进镜像（含数据库密码、SECRET_KEY、钉钉密钥）
+# 生产部署通过 docker-compose.prod.yaml 的 bind mount 挂载到 /home/env/.env.prod
+backend/env/.env.dev
+backend/env/.env.prod
+backend/env/.env.test
