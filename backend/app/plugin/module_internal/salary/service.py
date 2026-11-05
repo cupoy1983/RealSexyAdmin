@@ -12,7 +12,7 @@ from app.core.exceptions import CustomException
 from app.modules.system.user.model import UserModel
 from app.plugin.module_internal.account.model import ExternalAccountBindingModel
 from app.plugin.module_internal.account.schema import SYSTEM_DINGTALK
-from app.plugin.module_internal.attendance.model import MonthlyReportModel
+from app.plugin.module_internal.attendance.model import MonthlyReportModel, RestDayModel
 from app.plugin.module_internal.attendance.service import MonthlyReportService
 
 from .model import PayslipModel, PerformanceEntryModel, SalaryProfileModel
@@ -30,6 +30,10 @@ from .schema import (
 
 MANAGE_PERMISSION = "module_internal:salary-performance:manage"
 _MONEY_STEP = Decimal("0.01")
+
+# ADR-0014：仅该考勤组享受「每休息一天补 100 元」，按当月天数计入工资条，不改档案
+REST_ALLOWANCE_GROUP_NAME = "DY-仓库"
+REST_ALLOWANCE_PER_DAY = Decimal("100")
 
 
 def _money(value: Any) -> Decimal:
@@ -447,13 +451,34 @@ class SalaryService:
         )
 
     # ── 工资条生成与确认 ────────────────────────────────────────
+    async def _rest_days_by_group(self, month: str) -> dict[str, int]:
+        """按考勤组统计当月休息日天数（ADR-0014）。
+
+        返回 {group_name: 天数}；只统计未删除且启用的记录。
+        """
+        rows = (
+            await self.db.execute(
+                select(RestDayModel.group_name, func.count(RestDayModel.id))
+                .where(
+                    RestDayModel.month == month,
+                    RestDayModel.is_deleted == False,  # noqa: E712
+                    RestDayModel.status == 0,
+                )
+                .group_by(RestDayModel.group_name)
+            )
+        ).all()
+        return {name: count for name, count in rows if name}
+
     @staticmethod
-    def _calculate(report: MonthlyReportModel, profile: SalaryProfileModel | None, deduction: Decimal) -> dict[str, Any]:
+    def _calculate(report: MonthlyReportModel, profile: SalaryProfileModel | None, deduction: Decimal, rest_days: int = 0) -> dict[str, Any]:
         required = Decimal(str(report.required_days or 0))
         actual = Decimal(str(report.actual_days or 0))
         base_salary = _money(profile.base_salary if profile else 0)
         full_bonus = _money(profile.full_attendance_bonus if profile else 0)
         allowance = _money(profile.allowance if profile else 0)
+        # ADR-0014：仓库组按当月休息日天数补贴，只进工资条、不改档案
+        if report.group_name == REST_ALLOWANCE_GROUP_NAME and rest_days > 0:
+            allowance = _money(allowance + REST_ALLOWANCE_PER_DAY * rest_days)
         performance_base = _money(profile.performance_base if profile else 0)
         performance_deduction = _money(deduction)
 
@@ -532,13 +557,19 @@ class SalaryService:
             .all()
         )
         deduction_map = {entry.oa_user_id: entry.deduction for entry in entries}
+        rest_days_map = await self._rest_days_by_group(month)
         now = datetime.now(UTC)
         missing_profiles = 0
         for report, user in rows:
             profile = profile_map.get(report.oa_user_id)
             if not profile:
                 missing_profiles += 1
-            values = self._calculate(report, profile, deduction_map.get(report.oa_user_id, Decimal("0")))
+            values = self._calculate(
+                report,
+                profile,
+                deduction_map.get(report.oa_user_id, Decimal("0")),
+                rest_days=rest_days_map.get(report.group_name or "", 0),
+            )
             self.db.add(
                 PayslipModel(
                     oa_user_id=report.oa_user_id,

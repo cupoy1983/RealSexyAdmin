@@ -84,10 +84,12 @@
             <ElTableColumn prop="oa_dept_name" label="OA部门" min-width="160" />
             <ElTableColumn prop="dingtalk_dept_id" label="钉钉部门ID" min-width="160" />
             <ElTableColumn prop="dingtalk_dept_name" label="钉钉部门名称" min-width="180" />
-            <ElTableColumn label="操作" width="150" fixed="right">
+            <ElTableColumn label="操作" width="140" fixed="right" class-name="op-cell">
               <template #default="{ row }">
-                <ElButton v-hasPerm="[`${PERM}:update`]" link type="primary" @click="openDeptEdit(row)">编辑</ElButton>
-                <ElButton v-hasPerm="[`${PERM}:delete`]" link type="danger" @click="handleDeptDelete(row)">删除</ElButton>
+                <div class="op-buttons">
+                  <ElButton v-hasPerm="[`${PERM}:update`]" link type="primary" @click="openDeptEdit(row)">编辑</ElButton>
+                  <ElButton v-hasPerm="[`${PERM}:delete`]" link type="danger" @click="handleDeptDelete(row)">删除</ElButton>
+                </div>
               </template>
             </ElTableColumn>
           </ElTable>
@@ -320,5 +322,16 @@ onMounted(async () => {
 .fa-pagination {
   margin-top: 12px;
   justify-content: flex-end;
+}
+
+/* 操作列：按钮横向排列、垂直居中、不换行，避免行高被撑开 */
+.op-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.op-buttons :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 </style>

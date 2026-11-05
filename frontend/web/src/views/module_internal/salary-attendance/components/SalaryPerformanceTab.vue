@@ -108,13 +108,15 @@
               </ElTag>
             </template>
           </ElTableColumn>
-          <ElTableColumn label="操作" width="150" fixed="right">
+          <ElTableColumn label="操作" width="170" fixed="right" class-name="op-cell">
             <template #default="{ row }">
               <template v-if="!row.locked && row.requires_performance">
-                <ElButton v-if="!row.confirmed" link type="primary" :disabled="!performancePeriodOpen" @click="openPerformanceDialog(row as PerformanceEntry)">登记</ElButton>
-                <ElButton link :type="row.confirmed ? 'danger' : 'success'" :disabled="!row.attendance_ready || !performancePeriodOpen" @click="handlePerformanceConfirm(row as PerformanceEntry)">
-                  {{ row.confirmed ? "撤销确认" : "确认" }}
-                </ElButton>
+                <div class="op-buttons">
+                  <ElButton v-if="!row.confirmed" link type="primary" :disabled="!performancePeriodOpen" @click="openPerformanceDialog(row as PerformanceEntry)">登记</ElButton>
+                  <ElButton link :type="row.confirmed ? 'danger' : 'success'" :disabled="!row.attendance_ready || !performancePeriodOpen" @click="handlePerformanceConfirm(row as PerformanceEntry)">
+                    {{ row.confirmed ? "撤销确认" : "确认" }}
+                  </ElButton>
+                </div>
               </template>
             </template>
           </ElTableColumn>
@@ -367,4 +369,15 @@ onMounted(() => {
 <style scoped>
 .fa-search-form { margin-bottom: 12px; }
 .fa-pagination { margin-top: 12px; justify-content: flex-end; }
+
+/* 操作列：按钮横向排列、垂直居中、不换行，避免行高被撑开 */
+.op-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.op-buttons :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
 </style>
