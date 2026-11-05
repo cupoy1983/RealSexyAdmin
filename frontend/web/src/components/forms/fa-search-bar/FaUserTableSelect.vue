@@ -88,7 +88,7 @@ const selectConfig: ISelectConfig = {
     { type: "selection", width: 50, align: "center" },
     { label: "编号", align: "center", prop: "id", width: 100 },
     { label: "账号", align: "center", prop: "username" },
-    { label: "用户名", align: "center", prop: "name", width: 120 },
+    { label: "姓名", align: "center", prop: "name", width: 120 },
     {
       label: "状态",
       align: "center",

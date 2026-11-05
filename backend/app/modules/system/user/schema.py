@@ -25,7 +25,7 @@ PASSWORD_FIELD_DESC = (
 class CurrentUserUpdateSchema(BaseModel):
     """基础用户信息"""
 
-    name: str | None = Field(default=None, max_length=32, description="名称")
+    name: str | None = Field(default=None, max_length=32, description="姓名")
     mobile: str | None = Field(default=None, max_length=11, description="手机号")
     email: EmailStr | None = Field(default=None, description="邮箱")
     gender: str | None = Field(default=None, max_length=1, description="性别(0:男 1:女 2:未知)")
@@ -78,7 +78,7 @@ class UserForgetPasswordSchema(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    username: str = Field(..., min_length=3, max_length=32, description="用户名")
+    username: str = Field(..., min_length=3, max_length=32, description="账号")
 
     @field_validator("username")
     @classmethod
@@ -129,13 +129,15 @@ class UserCreateSchema(CurrentUserUpdateSchema):
     """新增用户
     """
 
-    username: str | None = Field(default=None, max_length=32, description="用户名")
+    username: str | None = Field(default=None, max_length=32, description="账号")
     password: str | None = Field(default=None, description=PASSWORD_FIELD_DESC)
     status: int = Field(default=0, ge=0, le=1, description="状态(0:启动 1:停用)")
     description: str | None = Field(default=None, max_length=255, description="备注")
     is_superuser: bool | None = Field(default=False, description="是否超管")
-    dept_id: int | None = Field(default=None, description="部门ID")
-    role_ids: list[int] | None = Field(default=[], description="角色ID列表")
+    # ADR-0013：手机号/部门/角色必填。手机号是钉钉、快麦等外部账号匹配的唯一桥梁。
+    mobile: str = Field(..., max_length=11, description="手机号（必填）")
+    dept_id: int = Field(..., ge=1, description="部门ID（必填）")
+    role_ids: list[int] = Field(..., min_length=1, description="角色ID列表（必填）")
     position_ids: list[int] | None = Field(default=[], description="岗位ID列表")
     @field_validator("username")
     @classmethod
@@ -159,10 +161,10 @@ class UserCreateSchema(CurrentUserUpdateSchema):
 class UserRegisterSchema(BaseModel):
     """用户注册"""
 
-    username: str = Field(..., min_length=3, max_length=32, description="用户名")
+    username: str = Field(..., min_length=3, max_length=32, description="账号")
     password: str = Field(..., description=PASSWORD_FIELD_DESC)
     email: EmailStr | None = Field(default=None, description="邮箱")
-    name: str | None = Field(default=None, max_length=32, description="名称")
+    name: str | None = Field(default=None, max_length=32, description="姓名")
 
     @field_validator("username")
     @classmethod
@@ -188,7 +190,7 @@ class UserUpdateSchema(CurrentUserUpdateSchema):
 
     model_config = ConfigDict(from_attributes=True)
 
-    username: str | None = Field(default=None, max_length=32, description="用户名")
+    username: str | None = Field(default=None, max_length=32, description="账号")
     password: str | None = Field(default=None, description=PASSWORD_FIELD_DESC)
     status: int | None = Field(default=None, ge=0, le=1, description="状态(0:启动 1:停用)")
     description: str | None = Field(default=None, max_length=255, description="备注")
@@ -221,8 +223,8 @@ class UserOutSchema(CoreUserSchema, BaseSchema, UserBySchema):
     model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
 
     id: int = Field(default=0, description="主键ID")
-    username: str | None = Field(default=None, max_length=32, description="用户名")
-    name: str | None = Field(default=None, max_length=32, description="名称")
+    username: str | None = Field(default=None, max_length=32, description="账号")
+    name: str | None = Field(default=None, max_length=32, description="姓名")
     mobile: str | None = Field(default=None, max_length=11, description="手机号")
     email: EmailStr | None = Field(default=None, description="邮箱")
     gender: str | None = Field(default=None, max_length=1, description="性别(0:男 1:女 2:未知)")
@@ -259,7 +261,7 @@ class UserQueryParam(BaseQueryParam, UserByQueryParam):
     - 业务字段：用户名、名称、手机号、邮箱、部门、状态
     """
 
-    username: str | None = Field(None, description="用户名", json_schema_extra={"q": "like"})
+    username: str | None = Field(None, description="账号", json_schema_extra={"q": "like"})
     name: str | None = Field(None, description="名称", json_schema_extra={"q": "like"})
     mobile: str | None = Field(None, description="手机号", pattern=r"^1[3-9]\d{9}$", json_schema_extra={"q": "eq"})
     email: str | None = Field(

@@ -151,7 +151,7 @@
           <template #role_ids>
             <ElSelect v-model="formData.role_ids" multiple placeholder="请选择角色" filterable>
               <ElOption
-                v-for="item in roleOptions"
+                v-for="item in visibleRoleOptions"
                 :key="item.value"
                 :label="item.label"
                 :value="item.value"
@@ -283,6 +283,11 @@ function buildUserRowActions(
   }
 ): TableOperationAction[] {
   const sys = row.is_superuser === true;
+  // ADR-0013：非超管不得编辑超管或 ADMIN 角色的账号
+  const adminRole = (row.role_ids ?? []).some((id) =>
+    ["ADMIN", "SUPER_ADMIN"].includes(roleCodeById.value.get(Number(id)) ?? ""),
+  );
+  const editDenied = !isSuperAdmin.value && (sys || adminRole);
   const all: TableOperationAction[] = [
     {
       key: "resetPwd",
@@ -308,9 +313,9 @@ function buildUserRowActions(
       label: "编辑",
       artType: "edit",
       perm: "module_system:user:update",
-      disabled: sys,
+      disabled: sys || editDenied,
       run: () => {
-        if (sys) return;
+        if (sys || editDenied) return;
         ctx.onEdit(row.id!);
       },
     },
@@ -347,8 +352,20 @@ const deptFilterId = ref<string | number | undefined>(undefined);
 const appStore = useAppStore();
 const drawerSize = computed(() => (appStore.device === DeviceEnum.DESKTOP ? "450px" : "90%"));
 const deptOptions = ref<OptionType[]>();
-const roleOptions = ref<Array<{ value: number; label: string; disabled?: boolean }>>();
+const roleOptions = ref<Array<{ value: number; label: string; code?: string; disabled?: boolean }>>();
 const positionOptions = ref<Array<{ value: number; label: string; disabled?: boolean }>>();
+
+// ADR-0013：非超管只能指派普通用户角色 USER，超管不受限
+const isSuperAdmin = computed(() => Boolean(userStore.basicInfo?.is_superuser));
+const visibleRoleOptions = computed(() =>
+  isSuperAdmin.value ? (roleOptions.value ?? []) : (roleOptions.value ?? []).filter((o) => o.code === "USER"),
+);
+// 角色 ID → 编码映射，用于判断某行用户是否属于高权限账号
+const roleCodeById = computed(() => {
+  const map = new Map<number, string>();
+  for (const o of roleOptions.value ?? []) map.set(Number(o.value), o.code ?? "");
+  return map;
+});
 const { importVisible, exportVisible, openImport, openExport } = useImportExport();
 const detailFormData = ref<UserInfo>({});
 
@@ -374,7 +391,7 @@ const userDetailItems: DescriptionsItem[] = [
   { label: "编号", prop: "id" },
   { label: "头像", prop: "avatar", slot: "avatar" }, // 自定义插槽渲染
   { label: "账号", prop: "username" },
-  { label: "用户名", prop: "name" },
+  { label: "姓名", prop: "name" },
   { label: "性别", prop: "gender", slot: "gender" }, // 三种状态 Tag
   { label: "部门", prop: "dept_name" },
   { label: "角色", prop: "roles", slot: "roles" }, // 数组 join 渲染
@@ -411,7 +428,7 @@ const userDialogFormItems = computed<FormItem[]>(() => [
     type: "input",
     props: { placeholder: "请输入账号", disabled: !!formData.value.id },
   },
-  { key: "name", label: "用户名", type: "input", props: { placeholder: "请输入用户名" } },
+  { key: "name", label: "姓名", type: "input", props: { placeholder: "请输入姓名" } },
   {
     key: "gender",
     label: "性别",
@@ -447,7 +464,7 @@ const userDialogFormItems = computed<FormItem[]>(() => [
     hidden: !!formData.value.id,
     props: { placeholder: "请输入密码", type: "password", showPassword: true, clearable: true },
   },
-  { key: "is_superuser", label: "是否超管", type: "switch" },
+  { key: "is_superuser", label: "是否超管", type: "switch", hidden: !isSuperAdmin.value },
   {
     key: "status",
     label: "状态",
@@ -502,10 +519,10 @@ const userSearchItems = computed<SearchFormItem[]>(() => [
     span: 6,
   },
   {
-    label: "用户名",
+    label: "姓名",
     key: "name",
     type: "input",
-    placeholder: "请输入用户名",
+    placeholder: "请输入姓名",
     clearable: true,
     span: 6,
   },
@@ -614,7 +631,7 @@ const {
           ),
       },
       { prop: "username", label: "账号", minWidth: 100, showOverflowTooltip: true },
-      { prop: "name", label: "用户名", minWidth: 100, showOverflowTooltip: true },
+      { prop: "name", label: "姓名", minWidth: 100, showOverflowTooltip: true },
       {
         prop: "status",
         label: "状态",
@@ -743,8 +760,8 @@ const rules = reactive({
     },
   ],
   name: [
-    { required: true, message: "请输入用户名", trigger: "blur" },
-    { max: 32, message: "用户名不能超过32位", trigger: "blur" },
+    { required: true, message: "请输入姓名", trigger: "blur" },
+    { max: 32, message: "姓名不能超过32位", trigger: "blur" },
   ],
   password: [
     { required: true, message: "请输入密码", trigger: "blur" },
@@ -759,12 +776,16 @@ const rules = reactive({
     },
   ],
   mobile: [
+    { required: true, message: "请输入手机号", trigger: "blur" },
     {
       pattern: /^1[3-9]\d{9}$/,
       message: "请输入正确的手机号码",
       trigger: "blur",
     },
   ],
+  // ADR-0013：部门、角色必填
+  dept_id: [{ required: true, message: "请选择部门", trigger: "change" }],
+  role_ids: [{ required: true, type: "array", message: "请选择角色", trigger: "change" }],
   is_superuser: [{ required: true, message: "请选择是否超管", trigger: "blur" }],
   status: [{ required: true, message: "请选择状态", trigger: "blur" }],
 });

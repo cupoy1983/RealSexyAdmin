@@ -492,20 +492,23 @@ class MonthlyReportService:
         return count > 0
 
     async def has_group_member(self) -> bool:
-        """当前是否存在「有考勤组」的钉钉绑定用户。
+        """是否存在已绑定钉钉的用户，用于决定手动拉取按钮是否显示。
 
-        一个都没有的话，就算拉也拉不出任何月报（没有考勤组的人会被同步跳过），
-        手动拉取按钮连显示都不该显示（ADR-0008）。
+        **不要再用 `group_id IS NOT NULL` 判定**：该字段只在同步成功时由
+        `_refresh_binding_snapshot` 回写，全新环境下永远是 NULL，会造成
+        「没同步过 → 按钮不显示 → 永远无法首次同步」的死锁（ADR-0008 第八节）。
+
+        考勤组的真正判定在 `sync_month` 里逐个调 `get_user_group` 完成，
+        没有考勤组的人会被跳过，不产生空壳月报，无需在按钮这一层再挡一次。
 
         返回:
-        - bool: 至少有一人有考勤组为 True
+        - bool: 至少有一个已绑定钉钉的用户为 True
         """
         count = (
             await self.db.execute(
                 select(func.count(ExternalAccountBindingModel.id)).where(
                     ExternalAccountBindingModel.system_type == SYSTEM_DINGTALK,
                     ExternalAccountBindingModel.is_deleted == False,  # noqa: E712
-                    ExternalAccountBindingModel.group_id.isnot(None),
                 )
             )
         ).scalar() or 0

@@ -7,6 +7,8 @@ declare global {
     value: string | number;
     /** 文本 */
     label: string;
+    /** 业务编码（角色选项等需要按编码过滤的场景使用） */
+    code?: string;
     /** 子列表  */
     children?: OptionType[];
   }

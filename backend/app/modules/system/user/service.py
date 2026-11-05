@@ -14,6 +14,7 @@ from app.modules.system.menu.crud import MenuCRUD
 from app.modules.system.menu.schema import MenuOutSchema, MenuTreeOutSchema
 from app.modules.system.position.crud import PositionCRUD
 from app.modules.system.role.crud import RoleCRUD
+from app.modules.system.role.model import RoleModel
 from app.utils.common_util import search_to_dict, traversal_to_tree
 from app.utils.excel_util import ExcelUtil
 from app.utils.password_util import PwdUtil
@@ -39,6 +40,9 @@ _USER_PRELOAD = ["dept", "roles", "positions"]
 # 当前用户信息预加载：需完整嵌套关联
 _USER_CURRENT_PRELOAD = ["dept", "positions", "roles.menus", "roles.depts"]
 
+# ADR-0013：高权限角色。非超管不得指派这些角色，也不得编辑属于这些角色的账号。
+_ADMIN_ROLE_CODES = {"ADMIN", "SUPER_ADMIN"}
+
 
 class UserService:
     """用户管理服务"""
@@ -46,6 +50,35 @@ class UserService:
     def __init__(self, auth: AuthSchema, db: AsyncSession) -> None:
         self.auth = auth
         self.db = db
+
+    def _is_superuser_operator(self) -> bool:
+        return bool(self.auth.user and self.auth.user.is_superuser)
+
+    async def _assert_operator_scope(self, *, role_ids: list[int] | None, is_superuser: bool | None) -> None:
+        """ADR-0013：非超管只能指派普通用户，即 is_superuser=False 且角色仅为 USER。"""
+        if self._is_superuser_operator():
+            return
+        if is_superuser:
+            raise CustomException(msg="无权创建或指派超级管理员")
+        if not role_ids:
+            raise CustomException(msg="角色不能为空")
+        roles = (
+            await self.db.execute(
+                select(RoleModel).where(RoleModel.id.in_(role_ids), RoleModel.is_deleted == False)  # noqa: E712
+            )
+        ).scalars().all()
+        codes = {r.code for r in roles}
+        if codes - {"USER"}:
+            raise CustomException(msg="只能指派普通用户角色 USER，不能指派管理员角色")
+
+    def _assert_target_editable(self, target: UserModel) -> None:
+        """ADR-0013：非超管不得编辑超管或 ADMIN 角色的账号，含基础信息。"""
+        if self._is_superuser_operator():
+            return
+        if target.is_superuser:
+            raise CustomException(msg="无权编辑超级管理员账号")
+        if any(r.code in _ADMIN_ROLE_CODES for r in target.roles):
+            raise CustomException(msg="无权编辑管理员账号")
 
     async def detail(self, id: int) -> UserOutSchema:
         user = await UserCRUD(self.auth, self.db).get_or_404(id=id, preload=_USER_PRELOAD)
@@ -97,8 +130,8 @@ class UserService:
         return page_result  # type: ignore[return-value]
 
     async def create(self, data: UserCreateSchema) -> UserOutSchema:
-        if data.is_superuser:
-            raise CustomException(msg="不允许创建超级管理员")
+        # ADR-0013：非超管只能建普通用户（角色仅 USER、非超管标记）；超管豁免
+        await self._assert_operator_scope(role_ids=data.role_ids, is_superuser=data.is_superuser)
         if await UserCRUD(self.auth, self.db).get(username=data.username):
             raise CustomException(msg="已存在相同用户名称的账号")
 
@@ -208,9 +241,21 @@ class UserService:
             if dept.status == 1:
                 raise CustomException(msg="部门已被禁用")
 
-        old_user = await UserCRUD(self.auth, self.db).get(id=id)
+        old_user = await UserCRUD(self.auth, self.db).get(id=id, preload=["roles"])
         if not old_user:
             raise CustomException(msg="该数据不存在")
+
+        # ADR-0013：非超管不得编辑高权限账号，也不得借编辑把他人提为管理员
+        self._assert_target_editable(old_user)
+        if not self._is_superuser_operator():
+            mobile = (data.mobile or "").strip()
+            if not mobile:
+                raise CustomException(msg="手机号不能为空")
+            if not data.dept_id:
+                raise CustomException(msg="部门不能为空")
+            if not data.role_ids:
+                raise CustomException(msg="角色不能为空")
+        await self._assert_operator_scope(role_ids=data.role_ids, is_superuser=None)
 
         update_data = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"role_ids", "position_ids"})
         await UserCRUD(self.auth, self.db).update(id=id, data=update_data)

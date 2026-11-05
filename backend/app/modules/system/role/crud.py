@@ -42,6 +42,9 @@ class RoleCRUD(CRUDBase[RoleModel, RoleCreateSchema, RoleUpdateSchema]):
         await self.db.flush()
 
     async def get_options(self) -> list[dict[str, Any]]:
-        """获取角色下拉选项，返回 [{value, label}]（自动按状态过滤）"""
+        """获取角色下拉选项，返回 [{value, label, code}]（自动按状态过滤）
+
+        code 供前端按角色编码做显隐/可选过滤（ADR-0013：非超管只能指派 USER）。
+        """
         items = await self.get_list(search={"status": 0})
-        return [{"value": item.id, "label": item.name} for item in items]
+        return [{"value": item.id, "label": item.name, "code": item.code} for item in items]
