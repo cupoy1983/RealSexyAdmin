@@ -86,7 +86,7 @@ api/module_internal/salary-attendance.ts   ← 一个页面一个 ts，内含各
 
 1. **定时任务代码块存在数据库里**：`task_cornjob_node` 的 `func` 字段是字符串，
    里面写死了 Service 的 import 路径。改文件救不了它，必须跑脚本 upsert 一次。
-   这个任务每月 7 号才执行，失败是静默的，务必核查。
+   这个任务现在每月 3 日 00:00 执行（2026-11-03 起，原为每月 7 号），失败是静默的，务必核查。
 2. **`app/modules/system/user/service.py` 的运行时 import**：新建用户、改手机号时
    联动钉钉，路径失效会直接报错。
 3. `app/config/setting.py` 注释里的路径。

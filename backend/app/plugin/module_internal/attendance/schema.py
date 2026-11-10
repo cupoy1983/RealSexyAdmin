@@ -59,6 +59,8 @@ class MonthlyReportOutSchema(MonthlyReportCreateSchema, BaseSchema, UserBySchema
 
     user_name: str | None = Field(default=None, description="当前OA用户姓名")
     current_dept_name: str | None = Field(default=None, description="当前OA部门名称")
+    # ADR-0017 第一节：月报是历史事实，不按当前用户状态过滤，只补状态标记。
+    user_status_label: str | None = Field(default=None, description="在职 / 已停用 / 已离职")
 
 
 class MonthlyReportQueryParam(BaseQueryParam, UserByQueryParam):
@@ -131,11 +133,34 @@ class MonthlyReportSyncStateSchema(BaseModel):
 
     can_sync 为 True 才显示按钮：既要有「有考勤组」的人可拉，
     又要求上个月还没被拉过（自动与手动互斥，谁先跑谁生效）。
+
+    ADR-0018：顺带返回该月的考勤确认状态，页面不再额外发一次请求。
     """
 
     month: str = Field(default="", description="上个月(YYYY-MM)")
     synced: bool = Field(default=False, description="上个月是否已同步过")
     can_sync: bool = Field(default=False, description="现在是否可以手动拉取")
+    confirmed: bool = Field(default=False, description="该月考勤是否已确认")
+    # 已生成正式工资条的月份连「撤销确认」都不允许，避免出现「已生成但显示未确认」。
+    can_confirm: bool = Field(default=False, description="该月确认状态是否可变更(已全量同步且无正式工资条)")
+    rest_editable: bool = Field(default=False, description="该月是否允许登记/删除公司休息日")
+
+
+class MonthConfirmSchema(BaseModel):
+    """考勤确认 / 撤销确认的请求体（ADR-0018）"""
+
+    month: str = Field(..., min_length=7, max_length=7, description="月份(YYYY-MM)")
+
+    @field_validator("month")
+    @classmethod
+    def _check_month(cls, v: str) -> str:
+        v = (v or "").strip()
+        if len(v) != _MONTH_PATTERN_LENGTH or v[4] != "-":
+            raise ValueError("月份格式必须为 YYYY-MM")
+        year, mon = v.split("-")
+        if not (year.isdigit() and mon.isdigit()) or not (1 <= int(mon) <= 12):
+            raise ValueError("月份格式必须为 YYYY-MM")
+        return v
 
 
 # ── 公司休息日（ADR-0009）─────────────────────────────────────

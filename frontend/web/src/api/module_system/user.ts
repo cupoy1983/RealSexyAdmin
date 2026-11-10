@@ -1,7 +1,11 @@
-import { request } from "@utils";
+import { request, type ExtendedRequestConfig } from "@utils";
 import { type MenuTable, type MenuForm } from "@/api/module_system/menu";
+import type { DismissalDeduction } from "@/api/module_internal/salary-attendance";
 
 const API_PATH = "/system/user";
+
+/** 后端离职预检发现钉钉查无此人时返回的业务码：前端据此弹人工确认框 */
+export const DISMISS_CONFIRM_REQUIRED_CODE = 4601;
 
 export const UserAPI = {
   getCurrentUserInfo(checkDataScope?: boolean) {
@@ -92,12 +96,26 @@ export const UserAPI = {
     });
   },
 
-  deleteUser(body: number[]) {
-    return request<ApiResponse>({
+  /**
+   * ADR-0016：带离职结算扣款时改传 { ids, deductions }，后端联合类型两种都收；
+   * 不带扣款仍是原来的 ID 数组，4601 人工确认重提也沿用同一份扣款。
+   */
+  deleteUser(
+    body: number[],
+    forceMissing = false,
+    options?: { showErrorMessage?: boolean; deductions?: DismissalDeduction[] },
+  ) {
+    const data = options?.deductions?.length
+      ? { ids: body, deductions: options.deductions }
+      : body;
+    const config: ExtendedRequestConfig = {
       url: `${API_PATH}/delete`,
       method: "delete",
-      data: body,
-    });
+      data,
+      params: { force_missing: forceMissing },
+      showErrorMessage: options?.showErrorMessage,
+    };
+    return request<ApiResponse>(config);
   },
 
   batchUser(body: BatchType) {

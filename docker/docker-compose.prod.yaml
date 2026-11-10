@@ -14,17 +14,17 @@
 # 与开发用的 docker-compose.yaml 互不影响，不要同时启动。
 # ============================================
 
-name: realsexy-oa
+name: realsexy-admin
 
 services:
   backend:
-    container_name: realsexy-oa-backend
+    container_name: realsexy-admin-backend
     build:
       context: ../
       dockerfile: ./docker/backend/Dockerfile
       args:
         DEPLOY_ENV: prod
-    image: "realsexy-oa-backend:${BACKEND_IMAGE_TAG:-1.0.0}"
+    image: "realsexy-admin-backend:${BACKEND_IMAGE_TAG:-1.0.0}"
     restart: unless-stopped
     # 注意：不要写 platform: linux/amd64。
     # Armbian 是 arm64，强制 amd64 会走 qemu 模拟，构建和运行都极慢。
@@ -38,14 +38,14 @@ services:
       TRUSTED_PROXY_HOPS: "1"
     ports:
       # 只绑定宿主机回环，公网必须经 OpenResty 的 HTTPS 访问
-      - "127.0.0.1:${OA_BACKEND_PORT:-8001}:8001"
+      - "127.0.0.1:${ADMIN_BACKEND_PORT:-8001}:8001"
     volumes:
       # 用户上传文件持久化，重建容器不丢文件
       - ../backend/static/upload:/home/static/upload
       # 生产环境配置单独挂载：密钥不进镜像，改配置只需重启
       - ../backend/env/.env.prod:/home/env/.env.prod:ro
     networks:
-      - oa_net
+      - admin_net
     healthcheck:
       test:
         [
@@ -68,7 +68,7 @@ services:
 
 networks:
   # 复用 1Panel 已存在的容器网络，backend 才能用容器名访问 MariaDB / Redis。
-  # 网络名用 docker network ls 确认后，通过 OA_DOCKER_NETWORK 覆盖。
-  oa_net:
-    name: ${OA_DOCKER_NETWORK:-1panel-network}
+  # 网络名用 docker network ls 确认后，通过 ADMIN_DOCKER_NETWORK 覆盖。
+  admin_net:
+    name: ${ADMIN_DOCKER_NETWORK:-1panel-network}
     external: true

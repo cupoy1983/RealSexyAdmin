@@ -5,7 +5,7 @@
 app.plugin.module_internal.attendance.service.MonthlyReportService 里，
 这里的代码块只负责调用它，不写任何业务规则。
 
-默认执行时间：每月 3 日 06:00（cron: 秒 分 时 日 月 周）。
+默认执行时间：每月 3 日 00:00（cron: 秒 分 时 日 月 周）。
 如需改时间，直接在系统「定时任务 → 节点」页面修改，不要再改这里。
 
 用法（在 backend 目录下执行）：
@@ -35,7 +35,7 @@ ImportUtil.find_models(MappedBase)
 
 JOB_CODE = "dingtalk_monthly_report"
 JOB_NAME = "钉钉考勤月报同步"
-# cron 表达式：秒 分 时 日 月 周 → 每月 3 日 06:00:00
+# cron 表达式：秒 分 时 日 月 周 → 每月 3 日 00:00:00
 JOB_CRON = "0 0 0 3 * ?"
 
 JOB_FUNC = '''def handler(**kwargs):
@@ -45,14 +45,15 @@ JOB_FUNC = '''def handler(**kwargs):
     from redis.asyncio import Redis
 
     from app.config.setting import settings
-    from app.core.ap_scheduler import SchedulerUtil
+    from app.core.ap_scheduler import scheduler
     from app.core.base_schema import AuthSchema
     from app.core.database import async_db_session
     from app.plugin.module_internal.attendance.service import MonthlyReportService
 
     async def _run() -> dict:
-        # 定时任务跑在 APScheduler 的工作线程里，不能在线程间复用主事件循环的 Redis 客户端；
-        # 这里在本线程的 asyncio.run 内部创建并关闭自己的客户端。
+        # 2026-11-07：协程投递回 uvicorn 主事件循环执行，全局 async_engine 归属正确。
+        # MonthlyReportService 不做 Redis 兜底，这里自建客户端并在同一 loop 内创建/关闭，
+        # 不复用主循环的 Redis 单例。
         redis = Redis(
             host=settings.REDIS_HOST,
             port=int(settings.REDIS_PORT),
@@ -68,9 +69,10 @@ JOB_FUNC = '''def handler(**kwargs):
         finally:
             await redis.aclose()
 
-    _ = SchedulerUtil  # 保持导入：便于排查调度器运行状态
-
-    return asyncio.run(_run())
+    loop = scheduler._eventloop
+    if loop is None or loop.is_closed():
+        raise RuntimeError("调度器主事件循环不可用，任务未执行")
+    return asyncio.run_coroutine_threadsafe(_run(), loop).result(timeout=600)
 '''
 
 
@@ -91,7 +93,7 @@ async def upsert_job_node() -> None:
                 node.executor = "threadpool"
                 node.coalesce = True
                 node.max_instances = 1
-                node.description = "每月7号同步上个月的钉钉智能考勤月报；具体执行时间可在节点页面调整"
+                node.description = "每月 3 日 00:00 同步上个月的钉钉智能考勤月报；具体执行时间可在节点页面调整"
                 logger.info(f"已更新定时任务节点: {JOB_NAME}(code={JOB_CODE})")
             else:
                 session.add(
@@ -106,7 +108,7 @@ async def upsert_job_node() -> None:
                         coalesce=True,
                         max_instances=1,
                         status=0,
-                        description="每月7号同步上个月的钉钉智能考勤月报；具体执行时间可在节点页面调整",
+                        description="每月 3 日 00:00 同步上个月的钉钉智能考勤月报；具体执行时间可在节点页面调整",
                     )
                 )
                 logger.info(f"已创建定时任务节点: {JOB_NAME}(code={JOB_CODE})")

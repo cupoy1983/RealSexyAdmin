@@ -33,6 +33,7 @@ JOB_NAME = "薪资绩效钉钉提醒"
 JOB_CRON = "0 0 12 * * ?"
 JOB_FUNC = '''def handler(**kwargs):
     import asyncio
+    from app.core.ap_scheduler import scheduler
     from app.core.base_schema import AuthSchema
     from app.core.database import async_db_session
     from app.plugin.module_internal.salary.service import SalaryService
@@ -42,7 +43,14 @@ JOB_FUNC = '''def handler(**kwargs):
             result = await SalaryService(AuthSchema(), db).process_daily_notifications()
             return result
 
-    return asyncio.run(_run())
+    # 2026-11-07：任务跑在 APScheduler 的 threadpool 线程，全局 async_engine 与
+    # SchedulerUtil.redis_instance 属于 uvicorn 主事件循环。另起 asyncio.run() 会复用
+    # 主循环的连接池，触发 "attached to a different loop"（每天 12:00 必崩）。
+    # 把协程投递回主循环执行，资源归属才正确；result() 阻塞等待，异常照常冒泡给调度器。
+    loop = scheduler._eventloop
+    if loop is None or loop.is_closed():
+        raise RuntimeError("调度器主事件循环不可用，任务未执行")
+    return asyncio.run_coroutine_threadsafe(_run(), loop).result(timeout=600)
 '''
 
 

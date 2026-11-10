@@ -6,10 +6,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.response import ResponseSchema, SuccessResponse
 from app.core.base_schema import AuthSchema, PageResultSchema, PaginationQueryParam
-from app.core.dependencies import AuthPermission, db_getter, redis_getter
+from app.core.dependencies import AuthPermission, db_getter, get_current_user, redis_getter
 from app.core.router_class import OperationLogRoute
 
 from .schema import (
+    BusinessCalendarSchema,
+    DismissalContextQuerySchema,
+    DismissalContextResultSchema,
     PerformanceConfirmResultSchema,
     PerformanceConfirmSchema,
     PerformanceEntryOutSchema,
@@ -22,6 +25,8 @@ from .service import MANAGE_PERMISSION, SalaryService
 
 SalaryRouter = APIRouter(route_class=OperationLogRoute, prefix="/salary", tags=["薪资绩效"])
 QUERY_PERMISSION = "module_internal:salary-performance:query"
+# 离职结算弹窗挂在用户管理页的删除链上，操作者持的是删用户权限，不是薪资管理权限。
+DELETE_USER_PERMISSION = "module_system:user:delete"
 
 
 @SalaryRouter.get("/payslip/page", summary="分页查询工资条", response_model=ResponseSchema[PageResultSchema[PayslipOutSchema]])
@@ -123,3 +128,47 @@ async def confirm_performance_controller(
 ) -> dict:
     result = await SalaryService(auth, db).confirm_performance(data)
     return SuccessResponse(data=result, msg=result.message)
+
+
+# ── 服务端业务日历（ADR-0017）──────────────────────────────────
+@SalaryRouter.get(
+    "/business-calendar",
+    summary="查询服务端业务日历",
+    response_model=ResponseSchema[BusinessCalendarSchema],
+)
+async def get_business_calendar_controller(
+    auth: Annotated[AuthSchema, Security(get_current_user)],
+) -> dict:
+    """两个 Tab 的默认月份与「3 日后开放」都由服务端给出，不用浏览器本地日期。"""
+    result = SalaryService.business_calendar()
+    return SuccessResponse(data=result, msg="查询业务日历成功")
+
+
+# ── 离职结算单（ADR-0016）──────────────────────────────────────
+@SalaryRouter.post(
+    "/dismissal/context",
+    summary="离职结算扣款上下文（只返回姓名/绩效基准，不做金额预览）",
+    response_model=ResponseSchema[DismissalContextResultSchema],
+)
+async def dismissal_context_controller(
+    auth: Annotated[AuthSchema, Security(AuthPermission([DELETE_USER_PERMISSION]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    data: Annotated[DismissalContextQuerySchema, Body()],
+) -> dict:
+    result = await SalaryService(auth, db).dismissal_context(oa_user_ids=data.oa_user_ids)
+    return SuccessResponse(data=result, msg="查询离职结算扣款上下文成功")
+
+
+@SalaryRouter.get(
+    "/dismissal/list",
+    summary="按月份查看离职结算单",
+    response_model=ResponseSchema[list[PayslipOutSchema]],
+)
+async def dismissal_list_controller(
+    auth: Annotated[AuthSchema, Security(AuthPermission([MANAGE_PERMISSION]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    month: Annotated[str, Query(min_length=7, max_length=7, description="月份(YYYY-MM)")],
+) -> dict:
+    """仅当所选月份存在结算单时前端才显示「查看离职结算单」按钮；普通员工不可见。"""
+    result = await SalaryService(auth, db).list_dismissal_payslips(month=month)
+    return SuccessResponse(data=result, msg="查询离职结算单成功")

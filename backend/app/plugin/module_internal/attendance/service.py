@@ -18,12 +18,14 @@ from app.plugin.module_internal.account.model import ExternalAccountBindingModel
 from app.plugin.module_internal.account.schema import SYSTEM_DINGTALK
 from app.plugin.infra.integration.dingtalk_client import DingtalkClient
 
+from ..config import NO_POLICY_MESSAGE, get_policy, load_policy
 from ..utils import audit_load_options, fetch_dept_names, fetch_user_profiles
 from .crud import DailyReportCRUD, MonthlyReportCRUD, RestDayCRUD
-from .model import DailyReportModel, MonthlyReportModel, RestDayModel
+from .model import DailyReportModel, MonthConfirmationModel, MonthlyReportModel, RestDayModel
 from .schema import (
     AttendanceGroupOptionSchema,
     DailyReportOutSchema,
+    MonthConfirmSchema,
     MonthlyReportOutSchema,
     MonthlyReportQueryParam,
     MonthlyReportSyncResultSchema,
@@ -69,6 +71,15 @@ MAX_COLUMN_PER_REQUEST = 20
 
 _LEAVE_RE = re.compile(r"(事假|病假|年假).*?([\d.]+)\s*天")
 _LEAVE_FIELD_MAP: dict[str, str] = {"事假": "leave_personal", "病假": "leave_sick", "年假": "leave_annual"}
+
+# 审批单原文形如：病假09-02 13:00到09-02 17:30 0.5天
+# 跨天假单在覆盖到的每一天都重复这条**整单**文本（起止时间 + 整单总量），
+# 不是「当天请假量」，所以不能按天取文本里的数字，必须从起止时间推导每天占比。
+_LEAVE_SPAN_RE = re.compile(
+    r"(\d{1,2})-(\d{1,2})\s*(\d{1,2}:\d{2})\s*到\s*(\d{1,2})-(\d{1,2})\s*(\d{1,2}:\d{2})"
+)
+_MORNING_CUTOFF_MINUTES = 12 * 60
+_AFTERNOON_CUTOFF_MINUTES = 17 * 60
 
 # 公司休息日的明细展示文案（ADR-0009）。含「休息」二字，前端配色规则据此归到绿色。
 COMPANY_REST_TEXT = "公司休息"
@@ -125,6 +136,98 @@ def _aggregate_leaves(approve_texts: list[Any]) -> dict[str, float]:
             except ValueError:
                 continue
     return leaves
+
+
+def _time_to_minutes(value: str) -> int:
+    try:
+        hour, minute = value.split(":")
+        return int(hour) * 60 + int(minute)
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _leave_order_days(month: str, span: re.Match[str], total: float) -> dict[date, float]:
+    """把一张跨天假单的整单天数折到它覆盖的每一天。
+
+    起止同日直接用声明总量；跨天时首日按开始时间（上午开始算 1 天、下午开始算
+    0.5 天）、末日按结束时间（下午结束算 1 天、上午结束算 0.5 天）、中间日算
+    1 天。最后与审批单声明的整单总量对齐：半天假 + 跨天混合时按时间规则已精确，
+    若钉钉口径与本系统不一致则按比例缩放兜底，保证既不放大也不缩小整单量。
+    """
+    year = int(month[:4])
+    sm, sd, start_time, em, ed, end_time = span.groups()
+    try:
+        start_day = date(year, int(sm), int(sd))
+        end_day = date(year, int(em), int(ed))
+        if end_day < start_day:  # 跨年（12 月 → 1 月）
+            end_day = date(year + 1, int(em), int(ed))
+    except ValueError:
+        return {}
+
+    days: list[date] = []
+    day = start_day
+    while day <= end_day:
+        days.append(day)
+        day += timedelta(days=1)
+    if not days:
+        return {}
+    if len(days) == 1:
+        return {days[0]: total}
+
+    parts: list[float] = []
+    for index, _ in enumerate(days):
+        if index == 0:
+            parts.append(1.0 if _time_to_minutes(start_time) <= _MORNING_CUTOFF_MINUTES else 0.5)
+        elif index == len(days) - 1:
+            parts.append(1.0 if _time_to_minutes(end_time) >= _AFTERNOON_CUTOFF_MINUTES else 0.5)
+        else:
+            parts.append(1.0)
+    weight = sum(parts)
+    scale = total / weight if weight else 0.0
+    return {d: part * scale for d, part in zip(days, parts)}
+
+
+def _aggregate_leaves_after_rest(daily_rows: list[Any], *, month: str, rest_dates: set[date]) -> dict[str, float]:
+    """休息日重算时的请假量：全月整单聚合 − 休息日占比（ADR-0009 A5）。
+
+    旧做法是「剔除休息日那天的审批文本再聚合」。跨天假单在每一天重复同一条
+    整单文本，删掉休息日那天后，剩余工作日仍会把整单计一次全量，休息日等于
+    完全没扣（BUG-05）。这里改为按假单还原每日占比，再从整月总量里扣掉落在
+    休息日的部分；文本解析不出起止时间时，按该单实际出现的日期平均拆分兜底。
+    无休息日时结果与 `_aggregate_leaves` 一致，保证重算幂等。
+    """
+    orders: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in daily_rows:
+        content = str(getattr(row, "approve_text", None) or "").strip()
+        if not content:
+            continue
+        work_date = row.work_date
+        row_date = work_date.date() if isinstance(work_date, datetime) else work_date
+        for kind, amount in _LEAVE_RE.findall(content):
+            key = (kind, content)
+            order = orders.setdefault(key, {"kind": kind, "total": 0.0, "dates": set(), "span": None})
+            try:
+                order["total"] = float(amount)
+            except ValueError:
+                continue
+            order["dates"].add(row_date)
+            if order["span"] is None:
+                order["span"] = _LEAVE_SPAN_RE.search(content)
+
+    leaves = {"事假": 0.0, "病假": 0.0, "年假": 0.0}
+    for order in orders.values():
+        kind = order["kind"]
+        total = float(order["total"] or 0)
+        leaves[kind] = leaves.get(kind, 0.0) + total
+        span = order["span"]
+        if span:
+            per_day = _leave_order_days(month, span, total)
+        else:
+            dates = sorted(order["dates"])
+            per_day = {d: total / len(dates) for d in dates} if dates else {}
+        deduction = sum(amount for d, amount in per_day.items() if d in rest_dates)
+        leaves[kind] -= deduction
+    return {kind: round(max(value, 0.0), 4) for kind, value in leaves.items()}
 
 
 def _categorize_raw(raw_text: str | None) -> str:
@@ -235,6 +338,8 @@ class MonthlyReportService:
         # 没有考勤组的人不参与考勤统计：他们的月报统计列全 0，显示出来只会误导。
         # 这一层过滤与同步时「跳过无考勤组的人」是双保险 —— 万一历史脏数据没清干净，
         # 页面也不会把它们露出来（ADR-0008）。
+        # ADR-0017 第一节：月报是历史事实，**刻意不按 UserModel.status / is_deleted 过滤**，
+        # 已停用 / 已离职员工照常显示，只在响应里补状态标记；与薪资的人员口径不同是有意的。
         conditions: list[Any] = [
             MonthlyReportModel.is_deleted == False,  # noqa: E712
             MonthlyReportModel.group_id.isnot(None),
@@ -255,7 +360,7 @@ class MonthlyReportService:
         return conditions
 
     async def _enrich(self, items: list[MonthlyReportOutSchema], objs: list[MonthlyReportModel]) -> None:
-        """补齐用户名与部门名。
+        """补齐用户名、部门名与员工状态标记（ADR-0017）。
 
         走 fetch_user_profiles 成批查一次，不要访问 `user.dept`——那是没配
         加载策略的 relationship，在 async 会话里会触发同步 IO 抛 MissingGreenlet。
@@ -265,6 +370,15 @@ class MonthlyReportService:
             profile = profiles.get(obj.oa_user_id) or {}
             item.user_name = profile.get("name")
             item.current_dept_name = profile.get("dept_name") or obj.dept_name
+            # 已软删 = 已离职；status=1 = 已停用；其余在职。
+            if not profile:
+                item.user_status_label = "未知"
+            elif profile.get("is_deleted"):
+                item.user_status_label = "已离职"
+            elif int(profile.get("status") or 0) == 1:
+                item.user_status_label = "已停用"
+            else:
+                item.user_status_label = "在职"
 
     async def page(
         self,
@@ -337,8 +451,24 @@ class MonthlyReportService:
         return item
 
     # ── 同步 ──────────────────────────────────────────────────────
-    async def sync_month(self, month: str | None = None, user_ids: list[int] | None = None) -> MonthlyReportSyncResultSchema:
-        """同步指定月份（默认上个月）的钉钉智能考勤月报"""
+    async def sync_month(
+        self,
+        month: str | None = None,
+        user_ids: list[int] | None = None,
+        *,
+        force: bool = False,
+    ) -> MonthlyReportSyncResultSchema:
+        """同步指定月份（默认上个月）的钉钉智能考勤月报。
+
+        2026-11-06 用户拍板（复核 A1 甲）：同一个（员工, 月份）默认只拉一次。
+        离职预同步、设置绩效时的自动补拉都会再次调用本方法，若不按人去重，
+        已经同步过的人会被整批重拉 —— 这正是 BUG-06「上次有内容、这次没内容」
+        得以发生的前提。默认跳过该月已有未软删月报的人，只补缺的人。
+
+        钉钉侧修数据（补卡、把缺卡改成空白）后需要刷新时，调用方显式传
+        `force=True` 强制重拉；此时 `_save_daily_rows` 仍受「列必须齐全」保护，
+        不会因为接口少返回列而误删整月日明细。
+        """
         self._require_configured()
         month = month or self._previous_month()
         first, last = self._month_range(month)
@@ -353,9 +483,30 @@ class MonthlyReportService:
         if user_ids:
             allow = set(user_ids)
             targets = [b for b in targets if b.oa_user_id in allow]
+        if not force:
+            already_synced = set(
+                (
+                    await self.db.execute(
+                        select(MonthlyReportModel.oa_user_id).where(
+                            MonthlyReportModel.month == month,
+                            MonthlyReportModel.is_deleted == False,  # noqa: E712
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            before = len(targets)
+            targets = [b for b in targets if b.oa_user_id not in already_synced]
+            skipped = before - len(targets)
+            if skipped:
+                result.messages.append(
+                    f"{month} 已有 {skipped} 人月报，按（员工, 月份）去重跳过；"
+                    "确需刷新请显式传 force=True"
+                )
         result.total = len(targets)
         if not targets:
-            result.messages.append("没有已绑定钉钉的OA用户，无需同步")
+            result.messages.append("没有需要同步的人员（都已同步或没有钉钉绑定）")
             return result
 
         client = self._client()
@@ -445,15 +596,20 @@ class MonthlyReportService:
             logger.info(f"钉钉考勤月报同步后叠加公司休息日重算: month={month}, 重算 {recalced} 人")
 
         # 整批要么全成、要么全废：这里刻意不吞单人异常，失败由调用方的事务回滚兜住。
-        # 所以「库里存在某个月的数据」就等价于「那个月拉全了」（ADR-0008）。
+        # 但「有数据 = 拉全了」不再成立：user_ids 部分同步（如离职预同步）也会写月报。
+        # 全量完成的判定统一走 month_synced 的人数核对，部分同步永不算全量完成。
         logger.info(f"钉钉考勤月报同步完成: month={month}, 成功{result.success} 无考勤组跳过{result.skipped}")
         return result
 
     async def sync_previous_month(self, user_ids: list[int] | None = None) -> MonthlyReportSyncResultSchema:
-        """系统定时任务入口：每月 7 号同步上个月。
+        """系统定时任务入口：每月 3 日 00:00 同步上个月。
 
         与手动拉取互斥：上个月**已经有数据**就说明这个月被拉过了（无论自动还是手动拉的），
         直接跳过。自动任务不回头补历史月份，对同一个月重复拉没有意义（ADR-0008）。
+
+        ADR-0018：已确认 / 已生成正式工资条的月份也直接跳过。否则一旦人员变动让
+        `month_synced()` 重新变 False，手动按钮和本定时任务都会改写已确认的考勤。
+        这里拦的是「上个月」的入口，不动 `sync_month()` 本身，离职前预同步与绩效补拉不受影响。
 
         参数:
         - user_ids (list[int] | None): 限定同步的 OA 用户；为空表示全部已绑定钉钉的用户
@@ -462,6 +618,11 @@ class MonthlyReportService:
         - MonthlyReportSyncResultSchema: 同步结果，跳过时 success 为 0 且 messages 里有说明
         """
         month = self._previous_month()
+        if await self.month_confirmed(month) or await self._has_formal_payslip(month):
+            logger.info(f"钉钉考勤月报同步跳过: month={month} 考勤已确认或已生成工资条，数据已锁定")
+            result = MonthlyReportSyncResultSchema(month=month)
+            result.messages.append(f"{month} 考勤已确认或已生成工资条，本次同步跳过")
+            return result
         if await self.month_synced(month):
             logger.info(f"钉钉考勤月报同步跳过: month={month} 已有数据（自动/手动拉取互斥）")
             result = MonthlyReportSyncResultSchema(month=month)
@@ -470,26 +631,164 @@ class MonthlyReportService:
         return await self.sync_month(month=month, user_ids=user_ids)
 
     async def month_synced(self, month: str) -> bool:
-        """某个月的考勤数据是否已经拉过。
+        """某个月的考勤是否已经「全量同步完成」。
 
-        「拉过」= 库里存在该月未软删的月报行。因为同步是整批原子提交的，
-        有数据就说明那次同步全部成功，不存在「拉了一半」的中间状态（ADR-0008）。
+        「完成」= **当前应到的人员名单全部都有当月月报**（集合包含），不是数量够就行。
+
+        两段演进，别再退回去：
+        - 最早用「存在任意一条月报」判定：离职预同步支持按 user_ids 部分同步，
+          只写离职员工一人的月报，存在性判断会误判全公司已完成（ADR-0008 前提失效）。
+        - 之后改成「月报行数 ≥ 应到人数」，仍有漏洞：人数会互相顶替。
+          例：A、B 已有 9 月月报，B 离职（绑定软删），C 新进考勤组还没同步，
+          应到 = {A, C} 共 2 人，已到 = {A, B} 两条历史月报，数量相等 → 误判完成，
+          C 的考勤永远不会被补，而 sync_previous_month 会跳过全量补拉。
+        - 现在按人员集合比对：应到名单 ⊆ 当月有月报的人员名单才算完成。
+          离职员工的历史月报不在应到名单里，不会再顶替新人；人员变动无需迁移即可自愈。
+
+        应到人员口径与绩效/工资条一致：账号启用、未软删，且有钉钉绑定与考勤组。
+        应到名单为空时一律返回 False（没有人要拉，就不要声称「已拉完」）。
 
         参数:
         - month (str): 月份(YYYY-MM)
 
         返回:
-        - bool: 已拉过为 True
+        - bool: 全量同步已完成为 True
+        """
+        active_user_ids = select(UserModel.id).where(
+            UserModel.is_deleted == False,  # noqa: E712
+            UserModel.status == 0,
+        )
+        expected_ids = set(
+            (
+                await self.db.execute(
+                    select(ExternalAccountBindingModel.oa_user_id).where(
+                        ExternalAccountBindingModel.system_type == SYSTEM_DINGTALK,
+                        ExternalAccountBindingModel.is_deleted == False,  # noqa: E712
+                        ExternalAccountBindingModel.oa_user_id.isnot(None),
+                        ExternalAccountBindingModel.oa_user_id.in_(active_user_ids),
+                        ExternalAccountBindingModel.group_id.isnot(None),
+                        ExternalAccountBindingModel.group_id != "",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not expected_ids:
+            return False
+        actual_ids = set(
+            (
+                await self.db.execute(
+                    select(MonthlyReportModel.oa_user_id).where(
+                        MonthlyReportModel.month == month,
+                        MonthlyReportModel.is_deleted == False,  # noqa: E712
+                        MonthlyReportModel.oa_user_id.in_(expected_ids),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return expected_ids <= actual_ids
+
+    # ── 月度考勤确认（ADR-0018）──────────────────────────────────
+    async def month_confirmed(self, month: str) -> bool:
+        """某月考勤是否已被管理员显式确认。
+
+        这是整月工资条生成的前置条件之一；离职结算单不走这条闸（ADR-0016）。
         """
         count = (
             await self.db.execute(
-                select(func.count(MonthlyReportModel.id)).where(
-                    MonthlyReportModel.month == month,
-                    MonthlyReportModel.is_deleted == False,  # noqa: E712
+                select(func.count(MonthConfirmationModel.id)).where(
+                    MonthConfirmationModel.month == month,
+                    MonthConfirmationModel.is_deleted == False,  # noqa: E712
                 )
             )
         ).scalar() or 0
         return count > 0
+
+    async def _has_formal_payslip(self, month: str) -> bool:
+        """某月是否已生成**正式工资条**（离职结算单不算，ADR-0016）。
+
+        与 `SalaryService.month_generated()` 同口径。这里直接查表而不是调 SalaryService：
+        salary.service 顶层 import 了本模块，反向调用会形成循环依赖。
+        """
+        from ..salary.model import PayslipModel
+        from ..salary.service import DISMISSAL_SOURCE  # 局部导入，避免顶层循环
+
+        count = (
+            await self.db.execute(
+                select(func.count(PayslipModel.id)).where(
+                    PayslipModel.month == month,
+                    PayslipModel.generation_source != DISMISSAL_SOURCE,
+                    PayslipModel.is_deleted == False,  # noqa: E712
+                )
+            )
+        ).scalar() or 0
+        return count > 0
+
+    async def confirm_month(self, data: MonthConfirmSchema) -> None:
+        """显式确认某月考勤（考勤数据 + 公司休息日已全部核对、登记完毕）。
+
+        确认按月 upsert。撤销走物理删，但历史脏数据可能留下软删行，故这里一并把
+        同月软删行复活，避免 month 唯一约束挡住再次确认。
+        """
+        month = data.month
+        if await self._has_formal_payslip(month):
+            raise CustomException(msg=f"{month} 已生成正式工资条，考勤已锁定，不能重复确认")
+        if not await self.month_synced(month):
+            raise CustomException(msg=f"{month} 考勤尚未全量同步，不能确认")
+        if await self.month_confirmed(month):
+            raise CustomException(msg=f"{month} 考勤已确认，无需重复确认")
+        now = datetime.now(UTC)
+        operator_id = self.auth.user.id or None
+        existing = (
+            await self.db.execute(
+                select(MonthConfirmationModel).where(MonthConfirmationModel.month == month)
+            )
+        ).scalars().first()
+        if existing:
+            existing.is_deleted = False
+            existing.deleted_time = None
+            existing.deleted_id = None
+            existing.confirmed_at = now
+            existing.status = 0
+            existing.updated_id = operator_id
+        else:
+            self.db.add(
+                MonthConfirmationModel(
+                    month=month,
+                    confirmed_at=now,
+                    status=0,
+                    created_id=operator_id,
+                )
+            )
+        await self.db.flush()
+        logger.info(f"考勤确认完成: month={month}, operator={operator_id}")
+
+    async def revoke_month_confirmation(self, data: MonthConfirmSchema) -> None:
+        """撤销某月考勤确认；已生成正式工资条后不可撤销（ADR-0018 第 4 条）。"""
+        month = data.month
+        if await self._has_formal_payslip(month):
+            raise CustomException(msg=f"{month} 已生成正式工资条，考勤已锁定，不能撤销确认")
+        if not await self.month_confirmed(month):
+            raise CustomException(msg=f"{month} 考勤尚未确认，无需撤销")
+        await self.db.execute(delete(MonthConfirmationModel).where(MonthConfirmationModel.month == month))
+        await self.db.flush()
+        logger.info(f"考勤确认已撤销: month={month}, operator={self.auth.user.id}")
+
+    async def _assert_rest_days_editable(self, months: set[str]) -> None:
+        """人为修改公司休息日前的硬闸（ADR-0018 第 3 / 4 条）。
+
+        只拦 create / delete 休息日这两个人为入口，不拦 `sync_month()` 末尾的幂等重算，
+        也不拦 `recalc_month()` 本身 —— 否则会误伤离职前预同步和每月 3 日的定时任务。
+        `sync-state` 只描述上个月，所以这里必须按「本次实际涉及的月份」逐个检查。
+        """
+        for month in sorted(months):
+            if await self._has_formal_payslip(month):
+                raise CustomException(msg=f"{month} 已生成正式工资条，考勤与公司休息日已锁定，不能修改")
+            if await self.month_confirmed(month):
+                raise CustomException(msg=f"{month} 考勤已确认，请先撤销确认再修改公司休息日")
 
     async def has_group_member(self) -> bool:
         """是否存在已绑定钉钉的用户，用于决定手动拉取按钮是否显示。
@@ -518,15 +817,22 @@ class MonthlyReportService:
         """上个月的同步状态，供考勤统计页面决定要不要显示手动拉取按钮。
 
         返回:
-        - MonthlyReportSyncStateSchema: {month, synced, can_sync}
+        - MonthlyReportSyncStateSchema: {month, synced, can_sync, confirmed, can_confirm, rest_editable}
         """
         month = self._previous_month()
         synced = await self.month_synced(month)
+        confirmed = await self.month_confirmed(month)
+        # 已生成正式工资条的月份连撤销确认都不允许（ADR-0018 第四节）。
+        can_confirm = synced and not await self._has_formal_payslip(month)
         return MonthlyReportSyncStateSchema(
             month=month,
             synced=synced,
             # 自动任务在每月 3 日 00:00 先跑；到同一时点仍未拉取成功，才允许手动补拉。
-            can_sync=date.today().day >= 3 and await self.has_group_member() and not synced,
+            # ADR-0018：已确认月份不能再补拉（要补拉必须先撤销确认），否则会改写已锁定的考勤。
+            can_sync=date.today().day >= 3 and not confirmed and not synced and await self.has_group_member(),
+            confirmed=confirmed,
+            can_confirm=can_confirm,
+            rest_editable=can_confirm and not confirmed,
         )
 
     async def _purge_ungrouped_rows(self, *, oa_user_id: int) -> int:
@@ -738,18 +1044,43 @@ class MonthlyReportService:
     ) -> None:
         """把「考勤结果」「关联的审批单」两列的日粒度值写成日明细行。
 
-        只写钉钉有内容的日期；重复同步按 (用户, 日期) 覆盖，保证幂等。
+        只保留钉钉本次有内容的日期：重复同步按 (用户, 日期) 覆盖，本次已清空的
+        旧行一并物理删除（唯一约束是用户 + 日期，软删残留会挡住下次重建）。
+        清理范围严格限定当前用户 + 当前月份，不动其他人和历史月份。
+
+        2026-11-06（复核严重 3）：「钉钉这次没返回这两列」不等于「钉钉把内容清空了」。
+        只有本次确实拿到了全部列 key，才允许执行删除；列不全时保留旧行并记 warning，
+        把不可逆的误删降级成下次正常同步可自愈的漏删。
         """
         if not day_result_id and not day_approve_id:
             return
+
+        # values_by_column 只在钉钉返回了某列时才建这个 key（见 _fetch_user_column_values）。
+        # 列定义改动 / 接口少返回列 / 分批请求某批为空时，key 缺失会让 .get() 返回 None，
+        # 整月每一天都被判成「已清空」，一条 DELETE 就能删光全月日明细。
+        requested_keys = [str(k) for k in (day_result_id, day_approve_id) if k]
+        columns_complete = bool(requested_keys) and all(k in values_by_column for k in requested_keys)
+        if not columns_complete:
+            logger.warning(
+                f"日明细同步跳过旧行清理: user={oa_user_id}, month={month}, "
+                f"期望列={requested_keys}, 实际返回列={list(values_by_column)}"
+            )
 
         results = values_by_column.get(str(day_result_id)) if day_result_id else {}
         approves = values_by_column.get(str(day_approve_id)) if day_approve_id else {}
         crud = DailyReportCRUD(self.auth, self.db)
         synced_at = datetime.now(UTC)
 
+        existing: dict[date, Any] = {}
+        for row in await crud.list_for_recalc(oa_user_id=oa_user_id, month=month):
+            row_date = row.work_date.date() if isinstance(row.work_date, datetime) else row.work_date
+            existing[row_date] = row
+        stale_ids: list[int] = []
+        visited: set[date] = set()
+
         day = start
         while day <= end:
+            visited.add(day)
             key = day.strftime("%Y-%m-%d")
             raw_text = str((results or {}).get(key) or "").strip() or None
             approve_text = str((approves or {}).get(key) or "").strip() or None
@@ -768,12 +1099,24 @@ class MonthlyReportService:
                     "synced_at": synced_at,
                     "status": 0,
                 }
-                exists = await crud.get_by_user_date(oa_user_id=oa_user_id, work_date=day)
+                exists = existing.get(day)
                 if exists:
                     await crud.update(id=exists.id, data=payload)
                 else:
                     await crud.create(data=payload)
+            elif day in existing and columns_complete:
+                # 清单 BUG-06：钉钉把某天「缺卡」修正为空白后，旧文字不能留着。
+                # 列不全时不动任何旧行（见上方 columns_complete 判定）。
+                stale_ids.append(existing[day].id)
             day += timedelta(days=1)
+
+        if columns_complete:
+            for row_date, row in existing.items():
+                if row_date not in visited:
+                    stale_ids.append(row.id)
+        if stale_ids:
+            await self.db.execute(delete(DailyReportModel).where(DailyReportModel.id.in_(stale_ids)))
+            await self.db.flush()
 
     # ── 公司休息日（ADR-0009）────────────────────────────────
     async def recalc_month(self, month: str) -> int:
@@ -782,14 +1125,24 @@ class MonthlyReportService:
         基准是 dingtalk_raw（同步时写入的钉钉原值），重算 = 基准 + 休息日调整，
         所以增删休息日可以反复跑而不漂移，删除也能精确还原。
 
+        2026-11-06 起按考勤组方案分叉：只有「休息」方案的组把日期放进
+        rest_by_group 走现行重算；「补工资」方案的组与未配置的组等同「没有
+        公司休息日」，日期不进入重算（不减应出勤、不清异常、不改日明细、
+        不扣请假占比），补贴由薪资侧按当天钉钉原文逐天判定。
+
         返回:
         - int: 重算了多少人的月报
         """
         rest_days = await RestDayCRUD(self.auth, self.db).list_rest_days(month=month)
+        policy_map = load_policy()
         rest_by_group: dict[str, set[date]] = {}
         for rd in rest_days:
+            group_id = str(rd.group_id or "")
+            policy = policy_map.get(group_id)
+            if policy is None or policy.mode != 1:
+                continue
             rd_date = rd.rest_date.date() if isinstance(rd.rest_date, datetime) else rd.rest_date
-            rest_by_group.setdefault(rd.group_id, set()).add(rd_date)
+            rest_by_group.setdefault(group_id, set()).add(rd_date)
 
         reports = await MonthlyReportCRUD(self.auth, self.db).list_by_month(month)
         for report in reports:
@@ -828,8 +1181,10 @@ class MonthlyReportService:
             if category != "rest":
                 row.effective_text = COMPANY_REST_TEXT
 
-        # 请假单独重算：只聚合非休息日的审批单（休息那天的请假不计，A5）
-        leaves = _aggregate_leaves([r.approve_text for r in daily_rows if r.work_date not in rest_dates])
+        # 请假单独重算：全月整单聚合后扣掉休息日占比（A5）。
+        # 不能「剔除休息日文本再聚合」——跨天假单每天重复同一条整单文本，
+        # 剔掉一天后剩余工作日仍会计一次全量（BUG-05）。
+        leaves = _aggregate_leaves_after_rest(daily_rows, month=report.month, rest_dates=rest_dates)
         for kind, field in _LEAVE_FIELD_MAP.items():
             stats[field] = leaves.get(kind, 0.0)
 
@@ -898,8 +1253,21 @@ class MonthlyReportService:
         return [RestDayOutSchema.model_validate(obj) for obj in rows]
 
     async def create_rest_days(self, data: RestDayCreateSchema) -> RestDayCreateResultSchema:
-        """批量登记公司休息日，随后立即重算受影响月份（A2 立即生效）"""
+        """批量登记公司休息日，随后立即重算受影响月份（A2 立即生效）。
+
+        2026-11-06：登记前先查 env 里的考勤组方案，没配该 group_id 直接拒绝，
+        不能写出一条没有处理方案、工资条也算不上的孤儿配置。
+        """
+        if get_policy(data.group_id) is None:
+            raise CustomException(msg=NO_POLICY_MESSAGE)
         group_name = await self._resolve_group_name(data.group_id)
+        if not group_name:
+            # BUG-10：解析不到考勤组名称说明该组已失效或从未同步过考勤。
+            # 继续写库会留下 group_name 为 NULL 的孤儿休息日：重算按 group_id
+            # 生效但工资条补贴按 group_name 匹配（ADR-0014），两边会静默对不上。
+            raise CustomException(msg="考勤组不存在或已失效，请先同步考勤或检查员工考勤组")
+        # ADR-0018：按本次日期实际涉及的月份逐个硬拦，不能只看 sync-state 返回的上个月。
+        await self._assert_rest_days_editable({d.strftime("%Y-%m") for d in data.dates})
         crud = RestDayCRUD(self.auth, self.db)
         created = 0
         skipped: list[str] = []
@@ -926,6 +1294,20 @@ class MonthlyReportService:
 
     async def delete_rest_days(self, ids: list[int]) -> dict[str, Any]:
         """删除休息日，随后立即反向重算受影响月份（还原回钉钉原值）"""
+        # ADR-0018：先按「被删记录所属月份」硬拦，再物理删；删完就拿不到 month 了。
+        months_to_check = set(
+            (
+                await self.db.execute(
+                    select(RestDayModel.month).where(
+                        RestDayModel.id.in_(ids),
+                        RestDayModel.is_deleted == False,  # noqa: E712
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        await self._assert_rest_days_editable(months_to_check)
         removed = await RestDayCRUD(self.auth, self.db).physical_delete(ids)
         months = sorted({r.month for r in removed})
         for m in months:

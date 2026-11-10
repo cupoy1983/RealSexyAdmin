@@ -24,6 +24,8 @@ from .schema import (
     UserRegisterSchema,
     UserUpdateSchema,
 )
+from app.plugin.module_internal.salary.schema import UserDeleteWithSettlementSchema
+
 from .service import UserService
 
 UserRouter = APIRouter(route_class=OperationLogRoute, prefix="/user", tags=["用户管理"])
@@ -143,10 +145,24 @@ async def update_user_controller(
 async def delete_user_controller(
     auth: Annotated[AuthSchema, Security(AuthPermission(["module_system:user:delete"]))],
     db: Annotated[AsyncSession, Depends(db_getter)],
-    ids: Annotated[list[int], Body(description="ID列表")],
+    body: Annotated[
+        list[int] | UserDeleteWithSettlementSchema,
+        Body(description="ID列表；带离职结算扣款时传 {ids, deductions}"),
+    ],
+    force_missing: Annotated[
+        bool, Query(description="管理员已确认钉钉查无此人，跳过钉钉离职只删 OA 用户")
+    ] = False,
 ) -> JSONResponse:
-    await UserService(auth, db).delete(ids=ids)
-    return SuccessResponse(msg="删除用户成功")
+    # 旧调用只传 ID 数组；离职结算弹窗提交时改成带 ids + 逐人扣款的对象（ADR-0016 第九节）。
+    if isinstance(body, UserDeleteWithSettlementSchema):
+        ids, deductions = body.ids, body.deductions
+    else:
+        ids, deductions = body, []
+    settlement_summary = await UserService(auth, db).delete(
+        ids=ids, force_missing=force_missing, settlement_deductions=deductions
+    )
+    msg = f"删除用户成功；{settlement_summary}" if settlement_summary else "删除用户成功"
+    return SuccessResponse(msg=msg)
 
 
 @UserRouter.patch("/status/batch", summary="批量修改用户状态", response_model=ResponseSchema[None])

@@ -11,7 +11,7 @@
 
     <ElTabs v-model="activeTab" @tab-change="handleTabChange">
       <ElTabPane label="工资条" name="payslips">
-        <ElForm inline class="fa-search-form" @submit.prevent>
+        <ElForm inline class="fa-search-form" @submit.prevent="loadPayslips">
           <ElFormItem label="月份">
             <ElDatePicker v-model="query.month" type="month" value-format="YYYY-MM" placeholder="全部月份" clearable />
           </ElFormItem>
@@ -21,6 +21,10 @@
           <ElFormItem>
             <ElButton type="primary" :loading="payslipLoading" @click="loadPayslips">查询</ElButton>
             <ElButton @click="resetPayslipQuery">重置</ElButton>
+          </ElFormItem>
+          <!-- ADR-0016：仅所选月份存在离职结算单时显示，普通员工不可见 -->
+          <ElFormItem v-if="canManage && query.month && dismissalRows.length > 0">
+            <ElButton type="warning" plain @click="dismissalDialogVisible = true">查看离职结算单</ElButton>
           </ElFormItem>
         </ElForm>
 
@@ -51,14 +55,16 @@
           <ElTableColumn label="实发工资" width="115" align="right" fixed="right">
             <template #default="{ row }"><strong>{{ money(row.net_amount) }}</strong></template>
           </ElTableColumn>
-          <ElTableColumn label="状态" width="90" fixed="right">
+          <ElTableColumn label="状态" width="130" fixed="right">
             <template #default="{ row }">
-              <ElTag :type="row.status === 1 ? 'success' : 'warning'">{{ row.status === 1 ? "已确认" : "未确认" }}</ElTag>
+              <ElTag :type="row.generation_source === 'dismissal' ? 'info' : row.status === 1 ? 'success' : 'warning'">
+                {{ row.generation_source === 'dismissal' ? "离职结算单" : row.status === 1 ? "已确认" : "未确认" }}
+              </ElTag>
             </template>
           </ElTableColumn>
           <ElTableColumn v-if="isSuperuser" label="操作" width="90" fixed="right">
             <template #default="{ row }">
-              <ElButton v-if="row.status === 0" link type="primary" @click="handleConfirm(row)">确认</ElButton>
+              <ElButton v-if="row.status === 0 && row.generation_source !== 'dismissal'" link type="primary" @click="handleConfirm(row)">确认</ElButton>
             </template>
           </ElTableColumn>
         </ElTable>
@@ -75,7 +81,7 @@
       </ElTabPane>
 	  
 	  <ElTabPane v-if="canManage" label="绩效登记" name="performance">
-        <ElForm inline class="fa-search-form" @submit.prevent>
+        <ElForm inline class="fa-search-form" @submit.prevent="loadPerformance">
           <ElFormItem label="月份"><ElDatePicker v-model="performanceMonth" type="month" value-format="YYYY-MM" :clearable="false" @change="loadPerformance" /></ElFormItem>
           <ElFormItem label="姓名"><ElInput v-model="performanceName" clearable style="width: 150px" /></ElFormItem>
           <ElFormItem><ElButton type="primary" :loading="performanceLoading" @click="loadPerformance">查询</ElButton></ElFormItem>
@@ -94,6 +100,14 @@
           title="该月考勤尚未同步。提交绩效设置时系统会自动拉取上月考勤，成功后再保存。"
           style="margin-bottom: 12px"
         />
+        <ElAlert
+          v-if="missingProfileNames.length > 0"
+          type="warning"
+          :closable="false"
+          show-icon
+          :title="`当前列表有 ${missingProfileNames.length} 人未设置薪资档案（${missingProfileNames.join('、')}）。本月工资条不会生成，请超级管理员到「薪资档案」页先设置。`"
+          style="margin-bottom: 12px"
+        />
         <ElTable v-loading="performanceLoading" :data="performanceRows" border size="small">
           <ElTableColumn prop="user_name" label="姓名" width="120" />
           <ElTableColumn prop="group_name" label="考勤组" min-width="130" />
@@ -101,10 +115,10 @@
           <ElTableColumn label="绩效扣款" width="120" align="right"><template #default="{ row }">{{ money(row.deduction) }}</template></ElTableColumn>
           <ElTableColumn label="实际绩效" width="120" align="right"><template #default="{ row }">{{ money(row.performance_amount) }}</template></ElTableColumn>
           <ElTableColumn prop="remark" label="扣款说明" min-width="180" show-overflow-tooltip />
-          <ElTableColumn label="状态" width="100">
+          <ElTableColumn label="状态" width="130">
             <template #default="{ row }">
-              <ElTag :type="row.locked ? 'info' : row.confirmed ? 'success' : 'warning'">
-                {{ !row.requires_performance ? "无绩效" : row.locked ? "已生成" : row.confirmed ? "已确认" : "待确认" }}
+              <ElTag :type="row.has_profile === false ? 'danger' : row.locked ? 'info' : row.confirmed ? 'success' : 'warning'">
+                {{ row.has_profile === false ? "未设薪资档案" : !row.requires_performance ? "无绩效" : row.locked ? "已生成" : row.confirmed ? "已确认" : "待确认" }}
               </ElTag>
             </template>
           </ElTableColumn>
@@ -113,7 +127,13 @@
               <template v-if="!row.locked && row.requires_performance">
                 <div class="op-buttons">
                   <ElButton v-if="!row.confirmed" link type="primary" :disabled="!performancePeriodOpen" @click="openPerformanceDialog(row as PerformanceEntry)">登记</ElButton>
-                  <ElButton link :type="row.confirmed ? 'danger' : 'success'" :disabled="!row.attendance_ready || !performancePeriodOpen" @click="handlePerformanceConfirm(row as PerformanceEntry)">
+                  <ElButton
+                    link
+                    :type="row.confirmed ? 'danger' : 'success'"
+                    :disabled="!row.attendance_ready || !performancePeriodOpen || (!row.confirmed && !row.id)"
+                    :title="!row.confirmed && !row.id ? '请先登记绩效（扣款为 0 也需登记），再确认' : ''"
+                    @click="handlePerformanceConfirm(row as PerformanceEntry)"
+                  >
                     {{ row.confirmed ? "撤销确认" : "确认" }}
                   </ElButton>
                 </div>
@@ -124,7 +144,7 @@
       </ElTabPane>
 
       <ElTabPane v-if="canManage" label="薪资档案" name="profiles">
-        <ElForm inline class="fa-search-form" @submit.prevent>
+        <ElForm inline class="fa-search-form" @submit.prevent="loadProfiles">
           <ElFormItem label="姓名"><ElInput v-model="profileName" clearable style="width: 160px" /></ElFormItem>
           <ElFormItem><ElButton type="primary" :loading="profileLoading" @click="loadProfiles">查询</ElButton></ElFormItem>
         </ElForm>
@@ -144,6 +164,30 @@
       
     </ElTabs>
   </ElCard>
+
+  <!-- ADR-0016：按月份查看离职结算单，落库即锁定、只读 -->
+  <ElDialog v-model="dismissalDialogVisible" title="离职结算单" width="1000px" destroy-on-close append-to-body>
+    <ElAlert
+      type="info"
+      :closable="false"
+      show-icon
+      :title="`所选月份 ${query.month} 共 ${dismissalRows.length} 张离职结算单。结算单落库即锁定、只读，不参与超管确认。`"
+      style="margin-bottom: 12px"
+    />
+    <ElTable :data="dismissalRows" border size="small">
+      <ElTableColumn prop="month" label="月份" width="90" fixed />
+      <ElTableColumn prop="user_name" label="姓名" width="100" fixed />
+      <ElTableColumn prop="required_days" label="应出勤" width="80" />
+      <ElTableColumn prop="actual_days" label="实出勤" width="80" />
+      <ElTableColumn label="折算工资" width="105" align="right"><template #default="{ row }">{{ money(row.prorated_base) }}</template></ElTableColumn>
+      <ElTableColumn label="全勤奖" width="95" align="right"><template #default="{ row }">{{ money(row.full_attendance_award) }}</template></ElTableColumn>
+      <ElTableColumn label="补贴" width="95" align="right"><template #default="{ row }">{{ money(row.allowance) }}</template></ElTableColumn>
+      <ElTableColumn label="实际绩效" width="100" align="right"><template #default="{ row }">{{ money(row.performance_amount) }}</template></ElTableColumn>
+      <ElTableColumn label="绩效扣款" width="100" align="right"><template #default="{ row }">{{ money(row.performance_deduction) }}</template></ElTableColumn>
+      <ElTableColumn label="实发工资" width="115" align="right" fixed="right"><template #default="{ row }"><strong>{{ money(row.net_amount) }}</strong></template></ElTableColumn>
+      <ElTableColumn label="类型" width="145" fixed="right"><template #default><ElTag type="info">离职结算单（已确定 · 锁定）</ElTag></template></ElTableColumn>
+    </ElTable>
+  </ElDialog>
 
   <ElDialog v-model="profileDialogVisible" title="设置薪资档案" width="480px" destroy-on-close>
     <ElForm label-width="100px">
@@ -180,6 +224,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import { SalaryAPI } from "@/api/module_internal/salary-attendance";
 import type {
+  BusinessCalendar,
   PerformanceEntry,
   PayslipTable,
   SalaryProfile,
@@ -192,7 +237,8 @@ defineOptions({ name: "SalaryPerformanceTab", inheritAttrs: false });
 const userStore = useUserStore();
 const canManage = computed(() => checkPerm("module_internal:salary-performance:manage"));
 const isSuperuser = computed(() => Boolean(userStore.basicInfo?.is_superuser));
-const performancePeriodOpen = computed(() => new Date().getDate() >= 3);
+// ADR-0017：3 日后是否开放由服务端业务日历给出，前端不用浏览器本地日期。
+const performancePeriodOpen = ref(false);
 const activeTab = ref("payslips");
 
 const query = ref({ page_no: 1, page_size: 20, month: "", name: "" });
@@ -217,15 +263,46 @@ const savingPerformance = ref(false);
 const editingPerformanceName = ref("");
 const performanceForm = ref({ oa_user_id: 0, month: "", performance_base: 0, deduction: 0, remark: "" });
 
-function previousMonth(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth()).padStart(2, "0")}`;
-}
-const performanceMonth = ref(previousMonth());
+// ADR-0017：默认月份与开放状态一律取服务端业务日历。取不到就留空、禁用按钮，
+// 绝不退回 new Date() 自己算（一月会算出 YYYY-00、客户端时间也可被改）。
+const businessCalendar = ref<BusinessCalendar | null>(null);
+const performanceMonth = ref("");
 const performancePreview = computed(() => Math.max(performanceForm.value.performance_base - performanceForm.value.deduction, 0));
+const missingProfileNames = computed(() =>
+  performanceRows.value.filter((row) => row.has_profile === false).map((row) => row.user_name || String(row.oa_user_id)),
+);
 
 function money(value?: number): string {
   return Number(value ?? 0).toFixed(2);
+}
+
+/** ADR-0017：绩效登记默认月份 = 服务端上个月；「3 日后开放」也以服务端为准。 */
+async function loadBusinessCalendar() {
+  try {
+    const response = await SalaryAPI.businessCalendar();
+    businessCalendar.value = response.data.data;
+    performanceMonth.value = businessCalendar.value.previous_month;
+    performancePeriodOpen.value = businessCalendar.value.performance_open;
+  } catch {
+    businessCalendar.value = null;
+    performanceMonth.value = "";
+    performancePeriodOpen.value = false;
+  }
+}
+
+// ADR-0016：仅当所选月份存在离职结算单、且是管理员 / 超管时才显示查看按钮。
+const dismissalRows = ref<PayslipTable[]>([]);
+const dismissalDialogVisible = ref(false);
+
+async function loadDismissalRows() {
+  dismissalRows.value = [];
+  if (!canManage.value || !query.value.month) return;
+  try {
+    const response = await SalaryAPI.dismissalList(query.value.month);
+    dismissalRows.value = response.data.data || [];
+  } catch {
+    dismissalRows.value = [];
+  }
 }
 
 async function loadPayslips() {
@@ -241,6 +318,7 @@ async function loadPayslips() {
   } finally {
     payslipLoading.value = false;
   }
+  void loadDismissalRows();
 }
 
 function resetPayslipQuery() {
@@ -361,8 +439,9 @@ function handleTabChange(name: string | number) {
   if (name === "performance") loadPerformance();
 }
 
-onMounted(() => {
-  loadPayslips();
+onMounted(async () => {
+  await loadBusinessCalendar();
+  await loadPayslips();
 });
 </script>
 

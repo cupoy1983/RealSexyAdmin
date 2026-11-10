@@ -48,7 +48,7 @@ const AttendanceAPI = {
 
   /**
    * 手动拉取上个月的考勤数据。
-   * 与每月 7 号的自动任务互斥：谁先跑谁生效，拉过之后按钮/自动任务都不再重复拉。
+   * 与每月 3 日 00:00 的自动任务互斥：谁先跑谁生效，拉过之后按钮/自动任务都不再重复拉。
    * 要打多次钉钉接口，人多时较慢，调用方要给 loading 并禁用按钮防止重复点击。
    */
   syncPreviousMonth() {
@@ -92,6 +92,24 @@ const AttendanceAPI = {
       data: ids,
     });
   },
+
+  /** ADR-0018：确认某月考勤（含公司休息日已登记完毕），是整月工资条生成的前置条件 */
+  confirmMonth(month: string) {
+    return request<ApiResponse<null>>({
+      url: `${ATTENDANCE_API_PATH}/month-confirm`,
+      method: "post",
+      data: { month },
+    });
+  },
+
+  /** ADR-0018：撤销某月考勤确认；已生成正式工资条的月份后端会拒绝 */
+  revokeMonthConfirm(month: string) {
+    return request<ApiResponse<null>>({
+      url: `${ATTENDANCE_API_PATH}/month-confirm`,
+      method: "delete",
+      data: { month },
+    });
+  },
 };
 
 export default AttendanceAPI;
@@ -120,6 +138,8 @@ export interface MonthlyReportTable {
   leave_sick?: number | null;
   leave_annual?: number | null;
   synced_at?: string;
+  /** ADR-0017：在职 / 已停用 / 已离职。月报是历史事实，不按状态过滤，只补标记 */
+  user_status_label?: string;
 }
 
 /** 日明细：一行 = 钉钉导出报表里的一个日期格 */
@@ -152,6 +172,12 @@ export interface MonthlyReportSyncState {
   month?: string;
   synced?: boolean;
   can_sync?: boolean;
+  /** ADR-0018：该月考勤是否已确认 */
+  confirmed?: boolean;
+  /** 该月确认状态是否可变更（已全量同步且无正式工资条） */
+  can_confirm?: boolean;
+  /** 该月是否允许登记 / 删除公司休息日 */
+  rest_editable?: boolean;
 }
 
 /** 手动拉取上个月考勤的返回结果 */
@@ -241,7 +267,57 @@ export const SalaryAPI = {
       data,
     });
   },
+  /** ADR-0017：服务器日期 / 上个月 / 3 日后是否开放，两个 Tab 共用一份 */
+  businessCalendar() {
+    return request<ApiResponse<BusinessCalendar>>({
+      url: `${SALARY_API_PATH}/business-calendar`,
+      method: "get",
+    });
+  },
+  /** ADR-0016 12:41：删除弹窗只取填扣款上下文，不返回任何结算预览数据 */
+  dismissalContext(oaUserIds: number[]) {
+    return request<ApiResponse<DismissalContextResult>>({
+      url: `${SALARY_API_PATH}/dismissal/context`,
+      method: "post",
+      data: { oa_user_ids: oaUserIds },
+    });
+  },
+  /** ADR-0016：按月份查看离职结算单，仅管理员 / 超管可调用 */
+  dismissalList(month: string) {
+    return request<ApiResponse<PayslipTable[]>>({
+      url: `${SALARY_API_PATH}/dismissal/list`,
+      method: "get",
+      params: { month },
+    });
+  },
 };
+
+/** 服务端业务日历（ADR-0017）：前端不再用浏览器本地日期推算 */
+export interface BusinessCalendar {
+  today: string;
+  current_month: string;
+  previous_month: string;
+  performance_open: boolean;
+}
+
+/** 删除用户时逐人手填的那一个绩效扣款（ADR-0016） */
+export interface DismissalDeduction {
+  oa_user_id: number;
+  deduction: number;
+}
+
+/** ADR-0016 12:41：删除员工弹窗逐人填扣款所需的最小上下文，不含金额 / 出单预览 */
+export interface DismissalEmployeeContext {
+  oa_user_id: number;
+  user_name?: string;
+  performance_base: number;
+  requires_performance: boolean;
+}
+
+export interface DismissalContextResult {
+  tip: string;
+  items: DismissalEmployeeContext[];
+}
 
 export interface PayslipPageQuery {
   page_no?: number;
@@ -306,6 +382,8 @@ export interface PerformanceEntry {
   locked: boolean;
   attendance_ready: boolean;
   requires_performance: boolean;
+  /** false = 未设置薪资档案；不等同「无绩效」，会阻止整月工资条生成 */
+  has_profile?: boolean;
   confirmed: boolean;
   confirmed_at?: string;
   confirmed_id?: number;

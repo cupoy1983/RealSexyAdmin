@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     DINGTALK_APP_SECRET: str = ""  # 企业内部应用 AppSecret
     DINGTALK_AGENT_ID: str = ""  # 微应用 AgentId
     DINGTALK_ACCESS_TOKEN_CACHE_TTL: int = 7000  # access_token Redis 缓存秒数（钉钉上限 7200，留 200s 余量）
-    # 考勤同步不在这里配置开关/时间：改由系统定时任务节点调度（每月7号同步上月），
+    # 考勤同步不在这里配置开关/时间：改由系统定时任务节点调度（每月 3 日 00:00 同步上月），
     # 节点代码块只调用 app.plugin.module_internal.attendance.service 里预写的 Service。
 
     # ================================================= #
@@ -194,7 +194,7 @@ class Settings(BaseSettings):
     # ================================================= #
     # ******************* 安全中间件配置 ****************** #
     # ================================================= #
-    ALLOWED_HOSTS: list[str] = ["admin.realsxy.com", "*.realsxy.com", "localhost", "127.0.0.1"]  # 允许访问的主机名列表
+    ALLOWED_HOSTS: list[str] = ["admin.realsxy.com", "admin.realsxy.cn", "localhost", "127.0.0.1"]  # 允许访问的主机名列表
 
     # 接口白名单（无需认证即可访问的接口路径，支持 * 开头表示前缀匹配）
     WHITE_API_LIST_PATH: list[str] = [

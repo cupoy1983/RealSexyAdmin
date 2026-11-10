@@ -189,6 +189,50 @@
       :page-data="data"
       :selection-data="selectedRows"
     />
+
+    <!-- ADR-0016：删除用户前的离职结算弹窗。批量删除时一张表列出全部待删人员，逐行填扣款 -->
+    <ElDialog
+      v-model="dismissalVisible"
+      title="离职结算"
+      width="960px"
+      destroy-on-close
+      append-to-body
+      :close-on-click-modal="false"
+      @close="onDismissalClose"
+    >
+      <!-- ADR-0016 12:41（A1/A2）：本弹窗只收集逐人绩效扣款，不做任何结算预览 -->
+      <ElAlert
+        v-if="dismissalContext"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="dismissalContext.tip"
+        style="margin-bottom: 12px"
+      />
+      <ElTable :data="dismissalContext?.items || []" border size="small" max-height="420">
+        <ElTableColumn prop="user_name" label="姓名" width="140" fixed />
+        <ElTableColumn label="绩效基准" width="120" align="right">
+          <template #default="{ row }">{{ Number(row.performance_base ?? 0).toFixed(2) }}</template>
+        </ElTableColumn>
+        <ElTableColumn label="绩效扣款" width="180" fixed="right">
+          <template #default="{ row }">
+            <ElInputNumber
+              v-model="dismissalDeductions[row.oa_user_id]"
+              :min="0"
+              :precision="2"
+              :step="100"
+              :disabled="!row.requires_performance"
+              style="width: 130px"
+            />
+            <div v-if="!row.requires_performance" class="dismissal-msg">无绩效奖金，无需填写</div>
+          </template>
+        </ElTableColumn>
+      </ElTable>
+      <template #footer>
+        <ElButton @click="settleDismissal(false)">取消，不删除</ElButton>
+        <ElButton type="danger" @click="settleDismissal(true)">确认删除并生成结算单</ElButton>
+      </template>
+    </ElDialog>
   </div>
 </template>
 
@@ -198,6 +242,7 @@ defineOptions({
   inheritAttrs: false,
 });
 
+import { h } from "vue";
 import { UserFilled } from "@element-plus/icons-vue";
 
 import { useAppStore } from "@stores";
@@ -205,10 +250,16 @@ import { DeviceEnum } from "@/enums/settings/device.enum";
 import { confirmToggleStatus } from "@/hooks/core/useConfirm";
 
 import UserAPI, {
+  DISMISS_CONFIRM_REQUIRED_CODE,
   type UserForm,
   type UserInfo,
   type UserPageQuery,
 } from "@/api/module_system/user";
+import {
+  SalaryAPI,
+  type DismissalContextResult,
+  type DismissalDeduction,
+} from "@/api/module_internal/salary-attendance";
 import {
   formatTree,
   renderTableOperationCell,
@@ -566,10 +617,104 @@ async function handleResetPassword(row: UserInfo) {
   }
 }
 
+type DismissConfirmError = { data?: { code?: number; msg?: string } };
+
+// ── 离职结算弹窗（ADR-0016）──────────────────────────────────
+const dismissalVisible = ref(false);
+const dismissalContext = ref<DismissalContextResult | null>(null);
+const dismissalDeductions = ref<Record<number, number>>({});
+let dismissalResolve: ((deductions: DismissalDeduction[] | null) => void) | null = null;
+
+/** 弹窗提交：ok=true 把逐人扣款交回删除链；ok=false 表示取消，整批不动。 */
+function settleDismissal(ok: boolean) {
+  const resolve = dismissalResolve;
+  dismissalResolve = null;
+  dismissalVisible.value = false;
+  if (!ok || !dismissalContext.value) {
+    resolve?.(null);
+    return;
+  }
+  resolve?.(
+    dismissalContext.value.items.map((item) => ({
+      oa_user_id: item.oa_user_id,
+      deduction: Number(dismissalDeductions.value[item.oa_user_id] ?? 0),
+    }))
+  );
+}
+
+/** 点右上角 X / ESC 关闭时也要把 Promise 收掉，不能让删除链一直挂着 */
+function onDismissalClose() {
+  if (dismissalResolve) settleDismissal(false);
+}
+
+/** ADR-0016 12:41：只取填扣款上下文并弹窗收集；返回 null 表示管理员取消或取数失败。 */
+async function collectDismissalDeductions(ids: number[]): Promise<DismissalDeduction[] | null> {
+  try {
+    const res = await SalaryAPI.dismissalContext(ids);
+    dismissalContext.value = res.data.data;
+    const form: Record<number, number> = {};
+    for (const item of dismissalContext.value?.items || []) {
+      form[item.oa_user_id] = 0;
+    }
+    dismissalDeductions.value = form;
+    dismissalVisible.value = true;
+    return await new Promise<DismissalDeduction[] | null>((resolve) => {
+      dismissalResolve = resolve;
+    });
+  } catch {
+    // 错误提示由 axios 拦截器统一处理
+    return null;
+  }
+}
+
+/**
+ * 删除用户（含离职结算 + 离职联动）。
+ * 顺序：弹窗收集扣款 → 首调删除 → 4601 人工核实后带同一份扣款重提。
+ * 出单结果由后端拼进响应 msg，axios 拦截器统一弹一条轻量提示（ADR-0016 12:41 A3）。
+ * 返回 false 表示管理员取消，整批不动。
+ */
+async function deleteUsersWithDismissConfirm(ids: number[]): Promise<boolean> {
+  const deductions = await collectDismissalDeductions(ids);
+  if (deductions === null) return false;
+  const options = { deductions };
+  try {
+    // 首调静默：4601 是「等待管理员确认」，不是操作失败，别先弹一个红色错误提示
+    await UserAPI.deleteUser(ids, false, { ...options, showErrorMessage: false });
+    return true;
+  } catch (error: unknown) {
+    const data = (error as DismissConfirmError | null)?.data;
+    if (data?.code !== DISMISS_CONFIRM_REQUIRED_CODE) {
+      // 静默只针对 4601；D1 预同步失败等其它错误要如实报出，否则管理员看不到拦停原因
+      if (data?.msg) ElMessage.error(data.msg);
+      throw error;
+    }
+    try {
+      await ElMessageBox.confirm(
+        h(
+          "div",
+          { style: "white-space: pre-line" },
+          `${data.msg ?? ""}\n\n请先到钉钉核实上述成员是否确实不存在；确认后才会删除 OA 用户，钉钉侧不会执行离职。`
+        ),
+        "钉钉成员核实",
+        {
+          type: "warning",
+          confirmButtonText: "强行删除系统用户",
+          cancelButtonText: "取消，整批不删",
+          confirmButtonClass: "el-button--danger",
+        }
+      );
+    } catch {
+      return false;
+    }
+    await UserAPI.deleteUser(ids, true, options);
+    return true;
+  }
+}
+
 async function deleteUserRow(id: number, name: string) {
   try {
     await confirmDelete(`确定删除「${name}」吗？`);
-    await UserAPI.deleteUser([id]);
+    if (!(await deleteUsersWithDismissConfirm([id]))) return;
     const idSet = [id];
     if (userStore.basicInfo.id && idSet.includes(userStore.basicInfo.id)) {
       userStore.clearUserInfo();
@@ -942,7 +1087,7 @@ async function handleBatchDelete() {
       selectedRows.value.map((r) => String(r.name ?? r.username ?? r.id))
     );
     batchDeleting.value = true;
-    await UserAPI.deleteUser(ids);
+    if (!(await deleteUsersWithDismissConfirm(ids))) return;
     if (userStore.basicInfo.id && ids.includes(userStore.basicInfo.id)) {
       userStore.clearUserInfo();
     } else {
@@ -985,5 +1130,11 @@ async function handleMoreClick(value: "enable" | "disable") {
   flex-direction: column;
   min-height: 0;
   padding: 0;
+}
+
+.dismissal-msg {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

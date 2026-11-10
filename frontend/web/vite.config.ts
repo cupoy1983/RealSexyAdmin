@@ -25,7 +25,9 @@ const __APP_INFO__ = {
 export default ({ mode }: { mode: string }) => {
   const root = process.cwd();
   const env = loadEnv(mode, root);
-  const isProduction = mode === "prod";
+  // 打包脚本统一使用 --mode production（见 package.json），判定必须与之保持一致；
+  // 写成 "prod" 会让生产分支永远不生效：不压缩、不去 console、仍带 vueDevTools。
+  const isProduction = mode === "production";
 
   return defineConfig({
     define: {

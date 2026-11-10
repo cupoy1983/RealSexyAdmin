@@ -130,3 +130,26 @@ class RestDayModel(ModelMixin, UserMixin):
     month: Mapped[str] = mapped_column(String(7), nullable=False, index=True, comment="所属月份(YYYY-MM)，冗余便于按月查")
     remark: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="备注(如 中秋补休)")
     status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="状态(0:启用 1:停用)")
+
+
+class MonthConfirmationModel(ModelMixin, UserMixin):
+    """月度考勤确认（ADR-0018）
+
+    管理员确认某月考勤数据与公司休息日安排已全部核对、登记完毕后写入一行。
+    它是整月工资条生成的前置条件；一旦该月已有正式工资条，考勤与休息日都不可再改，
+    确认状态本身也不再允许撤销。
+
+    一个月只保留一行：确认 = upsert，撤销 = 物理删除。用软删会占用 month 唯一约束，
+    撤销后无法再次确认（ADR-0018 第四节）。
+    """
+
+    __tablename__: str = "iac_attendance_month_confirmation"
+    __table_args__: tuple = (
+        UniqueConstraint("month", name="uk_iac_attendance_month_confirmation_month"),
+    )
+
+    month: Mapped[str] = mapped_column(String(7), nullable=False, index=True, comment="考勤确认月份(YYYY-MM)")
+    confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="确认时间"
+    )
+    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="状态(0:启用 1:停用)")

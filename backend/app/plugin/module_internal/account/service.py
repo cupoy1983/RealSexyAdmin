@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+from typing import Any
+
 from redis.asyncio.client import Redis
 from sqlalchemy import and_, false, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +35,10 @@ from .schema import (
 _DISMISSION_MEMO = "erp系统离职流程"  # 钉钉 dismissionMemo，ERP 发起的离职统一用这个备注
 _PASSIVE_REASON_PREFERRED = ("其他", "协议解除")  # 被动离职原因按名称的匹配优先级
 _CST = timezone(timedelta(hours=8))  # 离职日期按东八区自然日算
+
+# 离职预检发现「钉钉查无此人」时，用这个业务码让前端弹人工确认框，不视为系统错误。
+# 前后端约定同一个字面值；管理员确认后带 force_missing=1 重新提交才跳过钉钉。
+DISMISS_CONFIRM_REQUIRED_CODE = 4601
 
 
 class DeptMappingService:
@@ -316,23 +322,39 @@ class DingtalkAccountService:
         logger.info(f"钉钉成员手机号同步完成: user={oa_user_id} -> {new_mobile}")
 
     # ── 离职联动（ADR-0007）─────────────────────────────────────────────
-    async def dismiss_users(self, oa_user_ids: list[int]) -> list[str]:
+    async def dismiss_users(
+        self,
+        oa_user_ids: list[int],
+        *,
+        force_missing: bool = False,
+        settlement_deductions: list[Any] | None = None,
+    ) -> tuple[list[str], Any]:
         """删除 OA 用户时，把对应钉钉成员办离职，并软删绑定记录。
 
         顺序是设计的一部分（别调换）：
-        1. 全量预检 —— 任一失败就整批不动，OA 也不删；
+        1. 全量预检 —— 钉钉查无此人时返回待确认名单，管理员未确认则整批不动；
+           其余预检失败仍整批拦停，避免钉钉侧出现「办了一半」；
         2. 考勤预同步（当月 + 上月）—— 离职后 `getcolumnval` 查不到该员工数据；
-        3. 逐个办离职 —— 钉钉没有撤销离职的接口，**不可逆**；
-        4. 软删绑定记录 —— 否则留下幽灵绑定，同手机号重新建档会被挡。
+           钉钉侧临时失败（超时 / 限流 / token 失效 / 考勤组查询报错）整批不删（D1）；
+        3. 生成离职结算单（ADR-0016）—— 必须排在钉钉离职之前，用刚拉到的考勤算；
+        4. 逐个办离职 —— 钉钉没有撤销离职的接口，**不可逆**；中途失败如实返回
+           已完成 / 失败 / 未执行三名单，不假装整批没执行；
+        5. 软删绑定记录 —— 否则留下幽灵绑定，同手机号重新建档会被挡。
 
         参数:
         - oa_user_ids (list[int]): 待删除的 OA 用户 ID
+        - force_missing (bool): 管理员已确认「钉钉确实没有该成员」，跳过钉钉只删 OA
+        - settlement_deductions (list[Any] | None): 删除弹窗里管理员逐人手填的绩效扣款
 
         返回:
-        - list[str]: 跳过钉钉的人的说明（没绑定钉钉的成员），供调用方提示
+        - tuple[list[str], DismissalSettlementResultSchema]: 跳过钉钉的人的说明 +
+          本次离职结算单出单结果（生成张数 / 未出单月份，ADR-0016 12:41 A3）
         """
+        from app.plugin.module_internal.salary.schema import DismissalSettlementResultSchema
+
+        settlement = DismissalSettlementResultSchema()
         if not oa_user_ids:
-            return []
+            return [], settlement
 
         self._require_configured()
         crud = ExternalAccountBindingCRUD(self.auth, self.db)
@@ -342,7 +364,9 @@ class DingtalkAccountService:
         skipped = [f"用户[{uid}] 未绑定钉钉账号，跳过钉钉离职" for uid in oa_user_ids if uid not in bindings]
         targets = [uid for uid in oa_user_ids if uid in bindings]
         if not targets:
-            return skipped
+            # 没绑定钉钉也要按本地已有月报出结算单（ADR-0016 C6 / E1）。
+            settlement = await self._generate_dismissal_settlements(oa_user_ids, settlement_deductions)
+            return skipped, settlement
 
         client = self._client()
 
@@ -351,36 +375,72 @@ class DingtalkAccountService:
         admins = await client.list_admin_userids()
         main_admin = (admins.get(1) or [None])[0]
         checked: list[tuple[int, str, str]] = []
+        missing: list[str] = []
+        forced_missing: list[int] = []
         for uid in targets:
             dingtalk_userid = bindings[uid].external_user_id
             if dingtalk_userid in admins.get(1, []):
                 raise CustomException(msg=f"用户[{uid}] 预检失败：钉钉主管理员不支持通过该接口离职")
             if not await client.get_user_detail(userid=dingtalk_userid):
-                raise CustomException(msg=f"用户[{uid}] 预检失败：钉钉侧查不到该成员")
+                # BUG-09 / ADR-0007 第五节：查无此人不自动跳过，也不整批拦停，
+                # 而是把名单交回管理员确认「钉钉是否确实不存在该成员」。
+                if not force_missing:
+                    missing.append(f"用户[{uid}]（钉钉账号 {dingtalk_userid}）")
+                    continue
+                forced_missing.append(uid)
+                skipped.append(f"用户[{uid}] 钉钉侧查无此人，已按管理员确认跳过钉钉离职")
+                logger.warning(f"离职跳过钉钉: user={uid} -> {dingtalk_userid}（管理员确认强行删除）")
+                continue
             opt_userid = await self._resolve_opt_userid(client, userid=dingtalk_userid, main_admin=main_admin)
             if not opt_userid or opt_userid == dingtalk_userid:
                 raise CustomException(msg=f"用户[{uid}] 预检失败：找不到合法的离职操作人")
             checked.append((uid, dingtalk_userid, opt_userid))
 
-        # 阶段二：考勤预同步（失败不阻断离职，只记日志 —— 别让考勤数据缺失把人卡在系统里）
-        await self._sync_attendance_before_dismiss(oa_user_ids=targets)
+        if missing:
+            raise CustomException(
+                msg="以下成员在钉钉侧查不到，请先核实钉钉是否确实不存在该成员："
+                + "；".join(missing)
+                + "。核实无误后可强行删除系统用户（仅删除 OA 账号与绑定，跳过钉钉离职）；取消则整批不动。",
+                code=DISMISS_CONFIRM_REQUIRED_CODE,
+                status_code=200,
+            )
 
-        # 阶段三：逐个办离职（不可逆）
+        # 阶段二：考勤预同步（D1：失败即整批不删，不给「仍要删除」的出口）
+        await self._sync_attendance_before_dismiss(oa_user_ids=[uid for uid, _, _ in checked])
+
+        # 阶段三：生成离职结算单（ADR-0016）—— 必须在钉钉离职之前，用刚拉到的考勤算。
+        # 覆盖全部待删用户，含未绑定钉钉 / 4601 已确认跳过钉钉的人（按本地已有月报出单）。
+        settlement = await self._generate_dismissal_settlements(oa_user_ids, settlement_deductions)
+
+        # 阶段四：逐个办离职（不可逆）
         last_work_date_ms = int(
             datetime.now(_CST).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000
         )
-        for uid, dingtalk_userid, opt_userid in checked:
-            await client.dismiss_user(
-                userid=dingtalk_userid,
-                opt_userid=opt_userid,
-                last_work_date_ms=last_work_date_ms,
-                memo=_DISMISSION_MEMO,
-                passive_reason_id=passive_reason_id,
-            )
-            await crud.delete(ids=[bindings[uid].id])
-            logger.info(f"钉钉离职完成: user={uid} -> {dingtalk_userid}")
+        completed: list[int] = []
+        for index, (uid, dingtalk_userid, opt_userid) in enumerate(checked):
+            try:
+                await client.dismiss_user(
+                    userid=dingtalk_userid,
+                    opt_userid=opt_userid,
+                    last_work_date_ms=last_work_date_ms,
+                    memo=_DISMISSION_MEMO,
+                    passive_reason_id=passive_reason_id,
+                )
+                await crud.delete(ids=[bindings[uid].id])
+                completed.append(uid)
+                logger.info(f"钉钉离职完成: user={uid} -> {dingtalk_userid}")
+            except Exception as exc:  # noqa: BLE001 - 必须把外部不可回滚的进度如实报出去
+                not_run = [str(item[0]) for item in checked[index + 1 :]]
+                raise CustomException(
+                    msg="钉钉离职中途失败，本次 OA 用户未删除。已完成（钉钉侧已离职，不可撤销）："
+                    f"{completed or '无'}；失败：用户[{uid}] {exc!s}；未执行：{not_run or '无'}。"
+                    "请先到钉钉核对已完成名单，再决定重试范围。"
+                ) from exc
 
-        return skipped
+        # 查无此人且管理员已确认：钉钉侧没有动作，绑定照样软删，避免幽灵绑定
+        for uid in forced_missing:
+            await crud.delete(ids=[bindings[uid].id])
+        return skipped, settlement
 
     @staticmethod
     async def _pick_passive_reason_id(client: DingtalkClient) -> str:
@@ -424,7 +484,12 @@ class DingtalkAccountService:
     async def _sync_attendance_before_dismiss(self, *, oa_user_ids: list[int]) -> None:
         """离职前把当月 + 上月的考勤月报落库（离职后就查不到了）。
 
-        失败只记日志、不抛错：考勤数据缺失不该把人卡在 OA 里删不掉。
+        2026-11-09（D1 拍板）：失败即抛错、整批不删。钉钉里人还在、只是接口临时失败时，
+        放行删除会永久丢掉离职前的考勤，而钉钉离职不可撤销。报错写明哪个月没拉到。
+
+        2026-11-06（复核 A1 甲）：`sync_month` 默认按（员工, 月份）去重，
+        已同步过的月份在这里会直接跳过，不再为了「离职当刻最新数据」重拉一次。
+        这是用户确认的取舍；确需强制刷新时调用方要显式传 `force=True`，本处刻意不传。
         """
         from app.plugin.module_internal.attendance.service import MonthlyReportService
 
@@ -437,5 +502,23 @@ class DingtalkAccountService:
         for month in months:
             try:
                 await service.sync_month(month=month, user_ids=oa_user_ids)
-            except Exception as e:  # noqa: BLE001 - 考勤缺失不阻断离职
-                logger.warning(f"离职前考勤预同步失败: month={month}, users={oa_user_ids}: {e!s}")
+            except Exception as e:  # noqa: BLE001 - 钉钉接口失败原因很多，统一转成业务错误
+                logger.error(f"离职前考勤预同步失败，整批不删: month={month}, users={oa_user_ids}: {e!s}")
+                raise CustomException(
+                    msg=f"离职前考勤预同步失败（{month}）：{e!s}。"
+                    "本次删除已整批取消，钉钉成员仍在职，请修复后重试。"
+                ) from e
+
+    async def _generate_dismissal_settlements(
+        self, oa_user_ids: list[int], deductions: list[Any] | None
+    ) -> Any:
+        """ADR-0016：删除链内部调用，与钉钉离职共用同一个事务。
+
+        函数内延迟 import，避免 account 与 salary 模块启动期互相依赖。
+        """
+        from app.plugin.module_internal.salary.service import SalaryService
+
+        return await SalaryService(self.auth, self.db).generate_dismissal_settlements(
+            oa_user_ids=oa_user_ids,
+            deductions=deductions or [],
+        )

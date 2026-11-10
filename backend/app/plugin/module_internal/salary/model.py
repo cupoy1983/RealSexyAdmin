@@ -69,7 +69,7 @@ class PayslipModel(ModelMixin, UserMixin):
     net_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=0, nullable=False, comment="实发工资")
     generation_source: Mapped[str] = mapped_column(String(16), default="manual", nullable=False, comment="生成方式(auto/manual)")
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, comment="生成时间")
-    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="状态(0:未确认 1:已确认)")
+    status: Mapped[int] = mapped_column(Integer, default=0, nullable=False, comment="状态(0:待确认 1:已确定; 离职结算单落库即1)")
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="确认时间")
     confirmed_id: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="确认人OA用户ID")
     user: Mapped["UserModel | None"] = relationship("UserModel", foreign_keys=[oa_user_id], lazy="selectin")

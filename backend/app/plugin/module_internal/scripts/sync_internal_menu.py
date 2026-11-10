@@ -14,7 +14,9 @@
 行为：
     - 幂等：以 (name, parent_id) 判断，已存在则更新；
     - 旧菜单做软删除，并清理 sys_role_menus 授权，避免残留无效权限；
-    - 原来持有旧菜单的角色会自动改授到新菜单，不会出现「点开一片空白」；
+    - 原来持有旧菜单的角色只迁移到等价的「页面 + 查询」权限，
+      绝不借机扩成管理权限（manage/sync/rest、账号增删改）；
+    - 管理权限只授予 ADMIN / SUPER_ADMIN，或用 --role 显式指定的角色；
     - 加 --role 可为指定角色额外授权（追加，不整体替换）。
 
 用法（在 backend 目录下执行）：
@@ -52,6 +54,9 @@ OLD_PAGES = ["班次管理", "排班管理", "考勤记录", "请假登记", "�
 ATTENDANCE_DIR_OLD_NAME = "考勤管理"
 ATTENDANCE_DIR_NEW_NAME = "薪资考勤"
 
+# 管理权限默认只授予这两个角色；其他角色要拿管理权限必须用 --role 显式指定
+DEFAULT_MANAGE_ROLE_CODES = ["SUPER_ADMIN", "ADMIN"]
+
 # 新页面定义: (名称, 路由名, 路径, 组件目录, 图标, 顺序, 按钮[(标签, 权限字符串)])
 # 按钮权限写全串：薪资绩效是页面内 Tab 的预留权限，不跟随页面的资源段命名。
 NEW_PAGES = [
@@ -81,7 +86,7 @@ NEW_PAGES = [
             ("查询", "module_internal:salary-attendance:query"),
             # 全员考勤数据范围：普通员工只有上面的 query，后端会强制只看自己。
             ("全员考勤", "module_internal:salary-attendance:manage"),
-            # 手工拉取上个月考勤。与每月 7 号的自动任务互斥，拿到这个按钮的人才能触发；
+            # 手工拉取上个月考勤。与每月 3 日 00:00 的自动任务互斥，拿到这个按钮的人才能触发；
             # 没拿到的人仍然能看列表，只是没有那个按钮（后端接口也按同一个权限串拦）。
             ("手动拉取", "module_internal:salary-attendance:sync"),
             # 公司休息日安排（ADR-0009）：登记/删除休息日后会重算当月考勤，是写操作，
@@ -223,6 +228,8 @@ async def sync_menu_tree(session, role_codes: list[str]) -> dict:
     old_role_ids = await remove_old_menus(session, root_id=attendance_id) if attendance_id else []
 
     menu_ids = [root.id]
+    # 只读清单：根目录 + 页面 + query 按钮。旧角色只能迁到这一层（BUG-02）
+    readonly_menu_ids = [root.id]
     for page_name, route_name, path, component, icon, order, buttons in NEW_PAGES:
         page, created = await find_or_create(
             session,
@@ -244,6 +251,7 @@ async def sync_menu_tree(session, role_codes: list[str]) -> dict:
         )
         stats["created" if created else "skipped"] += 1
         menu_ids.append(page.id)
+        readonly_menu_ids.append(page.id)
 
         for btn_order, (btn_label, btn_permission) in enumerate(buttons, start=1):
             btn, btn_created = await find_or_create(
@@ -263,12 +271,16 @@ async def sync_menu_tree(session, role_codes: list[str]) -> dict:
             stats["created" if btn_created else "skipped"] += 1
             # 按钮也要进授权清单：薪资绩效这类权限只在按钮上，漏了就没有角色能拿到它
             menu_ids.append(btn.id)
+            if btn_permission.endswith(":query"):
+                readonly_menu_ids.append(btn.id)
 
-    # 原来有旧内务中心菜单的角色，继续授权新菜单，避免权限丢失
+    # 原来有旧内务中心菜单的角色，只迁移到等价的「页面 + 查询」权限，避免权限丢失；
+    # 管理权限不在迁移范围内，防止旧考勤只读角色被扩成全员考勤/绩效/休息日管理员。
     if old_role_ids:
-        await grant_role_ids(session, old_role_ids, menu_ids)
-    if role_codes:
-        await grant_roles(session, role_codes, menu_ids)
+        await grant_role_ids(session, old_role_ids, readonly_menu_ids)
+    # 管理权限只给超管线角色和 --role 显式指定的角色（含页面与全部按钮）
+    manage_role_codes = list(dict.fromkeys([*DEFAULT_MANAGE_ROLE_CODES, *role_codes]))
+    await grant_roles(session, manage_role_codes, menu_ids)
 
     return stats
 

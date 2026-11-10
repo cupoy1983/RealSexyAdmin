@@ -56,9 +56,11 @@ async def fetch_user_names(db: AsyncSession, user_ids: list[int | None]) -> dict
 
 
 async def fetch_user_profiles(db: AsyncSession, user_ids: list[int | None]) -> dict[int, dict[str, Any]]:
-    """批量取用户 id → {name, dept_id, dept_name}
+    """批量取用户 id → {name, dept_id, dept_name, status, is_deleted}
 
     用 selectinload 预加载部门，避免逐个用户触发懒加载导致 N+1 查询。
+    ADR-0017：这里**刻意不过滤 is_deleted / status** —— 考勤月报是历史事实，
+    已停用 / 已软删（离职）员工照样要查得到姓名与状态标记。
     """
     ids = sorted({int(uid) for uid in user_ids if uid})
     if not ids:
@@ -70,6 +72,8 @@ async def fetch_user_profiles(db: AsyncSession, user_ids: list[int | None]) -> d
             "name": user.name,
             "dept_id": user.dept_id,
             "dept_name": user.dept.name if user.dept else None,
+            "status": user.status,
+            "is_deleted": bool(user.is_deleted),
         }
         for user in users
     }

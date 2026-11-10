@@ -23,11 +23,22 @@ pnpm install
 pnpm dev
 ```
 
-默认开发端口由 **`.env`** 中的 **`VITE_PORT`** 决定（当前模板为 **5173**）。
+默认开发端口由 **`frontend/web/.env`** 的 **`VITE_PORT`** 决定，可被 **`.env.development`** 覆盖；实际值以本机 env 文件为准。
+
+**环境配置直接维护 `.env`、`.env.development`、`.env.production` 三个文件，仓库不提供 `.example` 模板。**
+分工：`.env` 放所有环境共享的通用配置（项目名、基础路径、权限模式、请求前缀等），
+`.env.production` 放生产专属覆盖值，`.env.development` 放本机开发联调的独立值。
+Git 跟踪口径：**`.env` 与 `.env.production` 随仓库跟踪**（通用配置与生产配置需要可复现）；
+**`.env.development` 被 `.gitignore` 忽略、不进 Git**，每台开发机按下方变量表自行创建／修改。
+**端口、代理目标、后端地址都是本机值，本文不写死，一律以本机 env 文件为准**；换机器或换部署环境时请核对这几个值。
+
+> **新机器首次开发**：`.env.development` 不在仓库里，需自行创建，**至少要写 `VITE_API_BASE_URL`**
+> （Vite 代理目标，`.env` 里没有这个键），否则 `pnpm dev` 的代理目标为空、接口连不上；
+> `VITE_PORT` 可选，不写则使用 `.env` 的通用值。生产构建不需要这份文件。
 
 ### 与后端联调
 
-1. 先启动 **FastAPI Admin 后端**，监听地址与 **`.env.dev`** 里 **`VITE_API_BASE_URL`** 一致（模板默认为 **`http://127.0.0.1:8001`**）。
+1. 先启动 **FastAPI Admin 后端**，其监听地址需与 **`.env.development`** 里 **`VITE_API_BASE_URL`** 一致（该文件不进 Git，按本机实际端口填写，本文不写死）。
 2. 前端开发时，浏览器请求发往当前页面同源路径，由 **Vite `server.proxy`** 把 **`VITE_APP_BASE_API`**（如 `/api/v1`）转发到上述后端。
 3. 若页面提示「连接被拒绝」，检查后端是否启动、端口是否一致，或把 **`VITE_API_BASE_URL`** 改成你的实际后端地址。
 
@@ -67,7 +78,7 @@ main.ts 启动
 
 | 命令                                          | 说明                                                          |
 | --------------------------------------------- | ------------------------------------------------------------- |
-| `pnpm dev`                                    | 本地开发（读取 `.env` + `.env.dev`）                          |
+| `pnpm dev`                                    | 本地开发（读取 `.env` + `.env.development`）                 |
 | `pnpm dev:force`                              | 强制预打包依赖后启动（缓存异常时）                            |
 | `pnpm build`                                  | `vue-tsc` 类型检查 + 生产构建，产物在 **`dist/`**             |
 | `pnpm build:dev` / `build:test` / `build:pro` | 按 mode 构建（需对应 env 文件）                               |
@@ -127,7 +138,7 @@ src/
 | `VITE_APP_WS_ENDPOINT` | WebSocket（如 AI 对话）                          |
 | `VITE_APP_TITLE`       | 页面标题（可被后端参数配置覆盖）                 |
 
-完整列表以仓库内 **`.env`**、**`.env.dev`** 为准；模板说明见 **`.env.example`**。修改任一 env 后需 **重启** `pnpm dev`。
+完整列表以 **`.env`**、**`.env.development`**、**`.env.production`** 为准；仓库没有 `.example` 模板，新建环境按上表自行创建。**具体端口、后端地址与域名随机器和部署环境变化，不在本文档固化。** 修改任一 env 后需 **重启** `pnpm dev`。
 
 ## 路由与菜单
 

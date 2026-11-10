@@ -13,6 +13,7 @@ from app.core.router_class import OperationLogRoute
 from .schema import (
     AttendanceGroupOptionSchema,
     DailyReportOutSchema,
+    MonthConfirmSchema,
     MonthlyReportOutSchema,
     MonthlyReportQueryParam,
     MonthlyReportSyncResultSchema,
@@ -93,6 +94,42 @@ async def get_attendance_sync_state_controller(
     return SuccessResponse(data=result, msg="查询考勤同步状态成功")
 
 
+# ── 月度考勤确认（ADR-0018）：整月工资条生成前置 + 生成后锁考勤 ──────
+
+
+@AttendanceRouter.post(
+    "/month-confirm",
+    summary="确认某月考勤（公司休息日已全部登记完毕）",
+    response_model=ResponseSchema[None],
+)
+async def confirm_attendance_month_controller(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_internal:salary-attendance:rest"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    data: Annotated[MonthConfirmSchema, Body()],
+) -> dict:
+    """权限复用「休息日安排」：能改休息日的人才有资格确认考勤，超管直接放行。
+
+    未确认的月份整月工资条一律不生成（`generation_blockers()` 第三道闸）。
+    """
+    await MonthlyReportService(auth, db).confirm_month(data)
+    return SuccessResponse(msg=f"{data.month} 考勤已确认，可以生成该月工资条")
+
+
+@AttendanceRouter.delete(
+    "/month-confirm",
+    summary="撤销某月考勤确认",
+    response_model=ResponseSchema[None],
+)
+async def revoke_attendance_month_controller(
+    auth: Annotated[AuthSchema, Security(AuthPermission(["module_internal:salary-attendance:rest"]))],
+    db: Annotated[AsyncSession, Depends(db_getter)],
+    data: Annotated[MonthConfirmSchema, Body()],
+) -> dict:
+    """已生成正式工资条的月份不可撤销，避免绕过「生成后锁考勤」。"""
+    await MonthlyReportService(auth, db).revoke_month_confirmation(data)
+    return SuccessResponse(msg=f"{data.month} 考勤确认已撤销，可继续登记公司休息日")
+
+
 @AttendanceRouter.post(
     "/sync",
     summary="手动拉取上月钉钉考勤月报",
@@ -103,7 +140,7 @@ async def sync_previous_month_controller(
     db: Annotated[AsyncSession, Depends(db_getter)],
     redis: Annotated[Redis, Depends(redis_getter)],
 ) -> dict:
-    """手动触发拉取上个月考勤。与每月 7 号的自动任务互斥，谁先跑谁生效。
+    """手动触发拉取上个月考勤。与每月 3 日 00:00 的自动任务互斥，谁先跑谁生效。
 
     后端再挡一次（按钮已经按状态隐藏，这里是防被绕过或直连接口重复拉）：
     同步是整批原子提交，任一人失败整批作废，所以重复拉同一月份没有意义。

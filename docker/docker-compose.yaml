@@ -118,7 +118,7 @@ services:
       # HTTPSRedirectMiddleware 会把 https 请求误判为 http 造成 301 循环
       FORWARDED_ALLOW_IPS: "*"
       # 钉钉账号联动与考勤月报（可选）。留空时账号联动/月报同步会直接失败并提示未配置。
-      # 同步时间不再由环境变量控制，改由系统定时任务节点调度（每月7号同步上月）。
+      # 同步时间不再由环境变量控制，改由系统定时任务节点调度（每月 3 日 00:00 同步上月）。
       # 值统一在 docker/.env 里填，不要写死在这里。
       DINGTALK_APP_KEY: "${DINGTALK_APP_KEY:-}"
       DINGTALK_APP_SECRET: "${DINGTALK_APP_SECRET:-}"

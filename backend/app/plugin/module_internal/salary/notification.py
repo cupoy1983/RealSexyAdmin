@@ -89,6 +89,7 @@ class SalaryNotificationService:
             (
                 await self.db.execute(
                     select(MonthlyReportModel.oa_user_id)
+                    .join(UserModel, UserModel.id == MonthlyReportModel.oa_user_id)
                     .join(
                         SalaryProfileModel,
                         and_(
@@ -109,6 +110,11 @@ class SalaryNotificationService:
                         MonthlyReportModel.month == month,
                         MonthlyReportModel.group_id.isnot(None),
                         MonthlyReportModel.is_deleted == False,  # noqa: E712
+                        # BUG-07：与绩效列表 / 确认进度 / 工资条生成保持同一人员口径。
+                        # 少了这两个条件，停用或已离职员工会永远留在「待设置」名单里，
+                        # 而管理页面又查不到他，N2 员工核对通知与整月流程会被永久卡住。
+                        UserModel.is_deleted == False,  # noqa: E712
+                        UserModel.status == 0,
                         PerformanceEntryModel.id.is_(None),
                     )
                 )

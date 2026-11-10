@@ -62,11 +62,12 @@ class UserService:
             raise CustomException(msg="无权创建或指派超级管理员")
         if not role_ids:
             raise CustomException(msg="角色不能为空")
-        roles = (
-            await self.db.execute(
-                select(RoleModel).where(RoleModel.id.in_(role_ids), RoleModel.is_deleted == False)  # noqa: E712
-            )
-        ).scalars().all()
+        # 与 _set_user_roles 走同一条带数据权限的查询路径（BUG-11）：
+        # 前置校验用原生 select、写入用 RoleCRUD 时，两条路径数据范围不同，
+        # 会出现「先通过校验、再报角色不存在」。统一后同一组角色 ID 两处结果一致；
+        # 不可见的 ADMIN 角色在这里看不到，但 _set_user_roles 同样查不到它，
+        # 会以「角色不存在」拒绝写入，不会因此放开角色数据权限。
+        roles = await RoleCRUD(self.auth, self.db).get_list(search={"id": ("in", role_ids)})
         codes = {r.code for r in roles}
         if codes - {"USER"}:
             raise CustomException(msg="只能指派普通用户角色 USER，不能指派管理员角色")
@@ -194,14 +195,22 @@ class UserService:
         if not conditions:
             return None
 
-        obj = (
+        objs = (
             await self.db.execute(select(UserModel).where(or_(*conditions), UserModel.is_deleted == true()))
-        ).scalars().first()
-        if obj is None:
+        ).scalars().all()
+        if not objs:
             return None
+        if len(objs) > 1:
+            # username 命中软删记录 A、mobile 命中另一条软删记录 B 的极端情形：
+            # username/mobile 各自有唯一索引，两条软删行不可能同时命中两个条件，
+            # 所以多于一条时复活任何一条都会与另一条撞唯一键（1062）。
+            # 不能 .first() 随便复活一个，必须报明确错误由超管先清理。
+            raise CustomException(msg="存在多条已删除账号分别占用该账号名和手机号，请联系超级管理员清理后再创建")
 
+        obj = objs[0]
         update_data = data.model_dump(exclude_none=True, exclude={"role_ids", "position_ids"})
-        update_data.update({"is_deleted": False, "deleted_time": None})
+        # 复活必须连删除人审计字段一起清掉，否则正常用户一直带着 deleted_id（BUG-12）
+        update_data.update({"is_deleted": False, "deleted_time": None, "deleted_id": None})
         await self.db.execute(update(UserModel).where(UserModel.id == obj.id).values(**update_data))
 
         # 被软删的钉钉绑定记录仍占着 (system_type, mobile) 唯一键，先物理清掉；
@@ -276,7 +285,13 @@ class UserService:
 
         return await self.detail(id=id)
 
-    async def delete(self, ids: list[int]) -> None:
+    async def delete(
+        self,
+        ids: list[int],
+        *,
+        force_missing: bool = False,
+        settlement_deductions: list[Any] | None = None,
+    ) -> str:
         if not ids:
             raise CustomException(msg="删除失败，删除对象不能为空")
         users = await UserCRUD(self.auth, self.db).get_list(search={"id": ("in", ids)}, preload=["roles", "positions"])
@@ -290,6 +305,10 @@ class UserService:
             if user.is_superuser:
                 errors.append(f"用户[{uid}]是超级管理员，不能删除")
                 continue
+            # ADR-0013：删除与编辑同级，非超管不得删除 ADMIN 角色账号（BUG-08）
+            if not self._is_superuser_operator() and any(r.code in _ADMIN_ROLE_CODES for r in user.roles):
+                errors.append(f"用户[{uid}]是管理员账号，仅超级管理员可删除")
+                continue
             if self.auth.user.id == uid:
                 errors.append("不能删除当前登陆用户")
                 continue
@@ -298,15 +317,21 @@ class UserService:
 
         # 删除用户联动钉钉离职（ADR-0007）。放在解关联之前：预检阶段就会抛错，
         # 整批不动 —— 钉钉离职没有撤销动作，宁可删不掉，也不要出现「钉钉走了、OA 还在」。
-        # 没绑定钉钉的用户会被跳过，不影响删除。
+        # 没绑定钉钉的用户会被跳过；钉钉查无此人时由管理员确认后带 force_missing 重提。
         from app.plugin.module_internal.account.service import DingtalkAccountService
 
-        await DingtalkAccountService(self.auth, self.db).dismiss_users(oa_user_ids=ids)
+        _, settlement = await DingtalkAccountService(self.auth, self.db).dismiss_users(
+            oa_user_ids=ids,
+            force_missing=force_missing,
+            settlement_deductions=settlement_deductions,
+        )
 
         # 先解除角色/岗位关联，再删除用户
         await UserCRUD(self.auth, self.db).set_user_roles(user_objs=users, role_objs=[])
         await UserCRUD(self.auth, self.db).set_user_positions(user_objs=users, position_objs=[])
         await UserCRUD(self.auth, self.db).delete(ids=ids)
+        # ADR-0016 12:41（A3）：把结算单出单摘要交回 controller 拼进响应 msg。
+        return settlement.summary()
 
     async def _load_users(self, user_ids: list[int], preload: list[str]) -> Sequence[UserModel]:
         """加载用户并校验存在性。"""
@@ -407,10 +432,12 @@ class UserService:
         return await self.detail(id=user_id)
 
     async def set_available(self, data: BatchSetAvailable) -> None:
-        users = await UserCRUD(self.auth, self.db).get_list(search={"id": ("in", data.ids)})
+        users = await UserCRUD(self.auth, self.db).get_list(search={"id": ("in", data.ids)}, preload=["roles"])
         for user in users:
             if user.is_superuser:
                 raise CustomException(msg="超级管理员状态不能修改")
+            # ADR-0013：停用/启用与编辑同级，非超管不得对 ADMIN 角色账号操作（BUG-08）
+            self._assert_target_editable(user)
         await UserCRUD(self.auth, self.db).set(ids=data.ids, status=data.status)
 
     async def change_password(self, data: UserChangePasswordSchema) -> UserOutSchema:
@@ -427,9 +454,12 @@ class UserService:
         return await self.detail(id=user_id)
 
     async def reset_password(self, data: ResetPasswordSchema) -> UserOutSchema:
-        user = await UserCRUD(self.auth, self.db).get_or_404(id=data.id)
+        user = await UserCRUD(self.auth, self.db).get_or_404(id=data.id, preload=["roles"])
         if user.is_superuser:
             raise CustomException(msg="超级管理员密码不能重置")
+        # ADR-0013：重置密码 = 接管账号，必须与编辑同级保护（BUG-08）。
+        # 非超管不得重置 ADMIN/SUPER_ADMIN 角色账号的密码。
+        self._assert_target_editable(user)
 
         new_password_hash = await PwdUtil.ahash_password(password=data.password)
         await UserCRUD(self.auth, self.db).change_password(id=data.id, password_hash=new_password_hash)
@@ -476,6 +506,8 @@ class UserService:
             "手机号": "mobile",
             "性别": "gender",
             "状态": "status",
+            # 角色编码或名称；留空默认 USER。旧模板没有此列时按兼容处理（见下）
+            "角色": "role_name",
         }
 
         try:
@@ -486,7 +518,8 @@ class UserService:
             if not rows:
                 raise CustomException(msg="导入文件为空")
 
-            missing_headers = [h for h in header_dict if h not in rows[0]]
+            # 「角色」列是后加的，旧模板没有也能导入（默认 USER）；其余列必须齐全
+            missing_headers = [h for h in header_dict if h != "角色" and h not in rows[0]]
             if missing_headers:
                 raise CustomException(msg=f"导入文件缺少必要的列: {', '.join(missing_headers)}")
 
@@ -555,15 +588,28 @@ class UserService:
             if not dept:
                 return 0, f"第{row_num}行: 部门ID {dept_id} 不存在"
 
+            # 角色列（BUG-03c）：填角色编码或名称，留空默认普通员工 USER。
+            # 非超管导入不得指派管理员角色，与 ADR-0013 边界一致。
+            role_cell = str(row.get("role_name") or "").strip()
+            role_query = select(RoleModel).where(RoleModel.is_deleted == False, RoleModel.status == 0)  # noqa: E712
+            role_query = role_query.where(or_(RoleModel.code == role_cell, RoleModel.name == role_cell)) if role_cell else role_query.where(RoleModel.code == "USER")
+            role = (await self.db.execute(role_query)).scalars().first()
+            if not role:
+                return 0, f"第{row_num}行: 角色「{role_cell or 'USER'}」不存在或已禁用"
+            if role.code in _ADMIN_ROLE_CODES and not self._is_superuser_operator():
+                return 0, f"第{row_num}行: 无权指派管理员角色 {role.code}"
+
+            mobile = str(row["mobile"]).strip() if row.get("mobile") is not None else ""
             user_data = {
                 "username": username,
                 "name": name,
                 "email": str(row["email"]).strip() if row.get("email") is not None else None,
-                "mobile": str(row["mobile"]).strip() if row.get("mobile") is not None else None,
+                "mobile": mobile or None,
                 "gender": str(row["gender"]).strip() if row.get("gender") is not None else "1",
                 "status": 0 if str(row["status"]).strip() == "正常" else 1,
                 "dept_id": dept_id,
                 "password": await PwdUtil.ahash_password(password=settings.PASSWORD_IMPORT_DEFAULT),
+                "role_ids": [role.id],
             }
 
             exists_user = await UserCRUD(self.auth, self.db).get(username=user_data["username"])
@@ -571,12 +617,15 @@ class UserService:
                 if exists_user.is_superuser:
                     return 0, f"第{row_num}行: 超级管理员不允许修改"
                 if update_support:
+                    # 更新已存在用户：不动角色关联（避免导入误改权限），手机号留空则保留原值
                     user_update_data = UserUpdateSchema(**user_data)
                     await UserCRUD(self.auth, self.db).update(id=exists_user.id, data=user_update_data)
                     return 1, None
                 else:
                     return 0, f"第{row_num}行: 用户 {user_data['username']} 已存在"
             else:
+                if not mobile:
+                    return 0, f"第{row_num}行: 手机号不能为空（新建用户按手机号匹配钉钉/快麦等外部账号）"
                 user_create_schema = UserCreateSchema(**user_data)
                 new_user = await UserCRUD(self.auth, self.db).create(
                     data=user_create_schema.model_dump(exclude_none=True, exclude={"role_ids", "position_ids"})  # type: ignore[arg-type]
@@ -598,6 +647,7 @@ class UserService:
             "手机号",
             "性别",
             "状态",
+            "角色",
         ]
         selector_header_list = ["性别", "状态"]
         option_list = [

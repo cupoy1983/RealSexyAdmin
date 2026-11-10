@@ -26,7 +26,33 @@
           休息日安排
         </ElButton>
       </ElFormItem>
-      <!-- 上个月没被拉过才显示：手动与每月 7 号的自动任务互斥，谁先跑谁生效 -->
+      <!-- ADR-0018：考勤确认是整月工资条生成前置；确认后该月休息日不可再改 -->
+      <ElFormItem v-if="syncState.month" :label="`${syncState.month} 考勤`">
+        <ElTag :type="confirmTag.type">{{ confirmTag.text }}</ElTag>
+        <ElButton
+          v-if="syncState.can_confirm && !syncState.confirmed"
+          v-hasPerm="['module_internal:salary-attendance:rest']"
+          type="success"
+          plain
+          style="margin-left: 8px"
+          :loading="confirming"
+          @click="handleConfirmMonth"
+        >
+          确认考勤
+        </ElButton>
+        <ElButton
+          v-else-if="syncState.can_confirm && syncState.confirmed"
+          v-hasPerm="['module_internal:salary-attendance:rest']"
+          type="warning"
+          plain
+          style="margin-left: 8px"
+          :loading="confirming"
+          @click="handleRevokeConfirm"
+        >
+          撤销确认
+        </ElButton>
+      </ElFormItem>
+      <!-- 上个月没被拉过才显示：手动与每月 3 日 00:00 的自动任务互斥，谁先跑谁生效 -->
       <ElFormItem v-if="syncState.can_sync">
         <ElButton
           v-hasPerm="['module_internal:salary-attendance:sync']"
@@ -51,6 +77,14 @@
       <ElTableColumn prop="month" label="月份" width="100" />
       <ElTableColumn label="姓名" min-width="120">
         <template #default="{ row }">{{ row.user_name || row.name || row.oa_user_id }}</template>
+      </ElTableColumn>
+      <!-- ADR-0017：月报是历史事实，停用 / 离职员工照常显示，只补状态标记 -->
+      <ElTableColumn label="员工状态" width="100">
+        <template #default="{ row }">
+          <ElTag :type="row.user_status_label === '已离职' ? 'info' : row.user_status_label === '已停用' ? 'warning' : 'success'">
+            {{ row.user_status_label || "—" }}
+          </ElTag>
+        </template>
       </ElTableColumn>
       <ElTableColumn label="部门" min-width="140">
         <template #default="{ row }">{{ row.current_dept_name || row.dept_name || "-" }}</template>
@@ -116,6 +150,15 @@
 
   <!-- 休息日安排：选考勤组 + 多选日期，保存即重算；下方列表可删 -->
   <ElDialog v-model="restVisible" title="休息日安排" width="640px" destroy-on-close append-to-body>
+    <!-- ADR-0018：上个月已确认 / 已生成工资条时提示锁定，其它月份仍可登记 -->
+    <ElAlert
+      v-if="!restEditable && restDisabledReason"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="restDisabledReason"
+      style="margin-bottom: 12px"
+    />
     <ElAlert
       type="warning"
       :closable="false"
@@ -155,9 +198,13 @@
       <ElTableColumn prop="remark" label="备注" min-width="120" show-overflow-tooltip />
       <ElTableColumn label="操作" width="90" fixed="right">
         <template #default="{ row }">
-          <ElPopconfirm title="删除后会重算并还原该天考勤，确认删除？" @confirm="removeRestDay(row)">
+          <ElPopconfirm
+            :disabled="isLockedMonth(row.month)"
+            title="删除后会重算并还原该天考勤，确认删除？"
+            @confirm="removeRestDay(row)"
+          >
             <template #reference>
-              <ElButton link type="danger">删除</ElButton>
+              <ElButton link type="danger" :disabled="isLockedMonth(row.month)">删除</ElButton>
             </template>
           </ElPopconfirm>
         </template>
@@ -170,7 +217,9 @@
 import { ElMessage } from "element-plus";
 
 import AttendanceAPI, {
+  SalaryAPI,
   type AttendanceGroupOption,
+  type BusinessCalendar,
   type DailyReportTable,
   type MonthlyReportSyncState,
   type MonthlyReportTable,
@@ -183,11 +232,8 @@ defineOptions({
   inheritAttrs: false,
 });
 
-function defaultMonth(): string {
-  const now = new Date();
-  const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, "0")}`;
-}
+// ADR-0017：默认「上个月」取服务端业务日历，前端不再自己用浏览器本地日期推算。
+const businessCalendar = ref<BusinessCalendar | null>(null);
 
 const canViewAll = computed(() =>
   ["module_internal:salary-attendance:manage", "module_internal:salary-performance:manage"].some((permission) => checkPerm(permission)),
@@ -198,9 +244,20 @@ const total = ref(0);
 const query = ref({
   page_no: 1,
   page_size: 20,
-  month: defaultMonth(),
+  month: "",
   name: undefined as string | undefined,
 });
+
+async function loadBusinessCalendar() {
+  try {
+    const res = await SalaryAPI.businessCalendar();
+    businessCalendar.value = res.data.data;
+    query.value.month = businessCalendar.value.previous_month;
+  } catch {
+    businessCalendar.value = null;
+    query.value.month = "";
+  }
+}
 
 async function loadData() {
   loading.value = true;
@@ -219,7 +276,7 @@ async function loadData() {
 }
 
 function resetQuery() {
-  query.value.month = defaultMonth();
+  query.value.month = businessCalendar.value?.previous_month || "";
   query.value.name = undefined;
   query.value.page_no = 1;
   loadData();
@@ -265,7 +322,7 @@ async function openDaily(row: MonthlyReportTable) {
 }
 
 // ── 手动拉取 ──────────────────────────────────────────────
-// 与每月 7 号的自动任务互斥：谁先跑谁生效，所以拉过之后按钮就自动消失。
+// 与每月 3 日 00:00 的自动任务互斥：谁先跑谁生效，所以拉过之后按钮就自动消失。
 const syncState = ref<MonthlyReportSyncState>({});
 const syncing = ref(false);
 
@@ -276,6 +333,54 @@ async function loadSyncState() {
   } catch {
     // 状态查不到就不显示按钮，不影响列表本身的查询
     syncState.value = {};
+  }
+}
+
+// ── 月度考勤确认（ADR-0018）──────────────────────────────────
+type TagType = "success" | "warning" | "info" | "danger" | "primary";
+const confirming = ref(false);
+
+const confirmTag = computed<{ type: TagType; text: string }>(() => {
+  if (!syncState.value.can_confirm) return { type: "info", text: "考勤已锁定" };
+  if (syncState.value.confirmed) return { type: "success", text: "已确认" };
+  return { type: "warning", text: "未确认" };
+});
+
+const restEditable = computed(() => syncState.value.rest_editable === true);
+
+const restDisabledReason = computed(() => {
+  const state = syncState.value;
+  if (!state.month) return "";
+  if (!state.synced) return `${state.month} 考勤尚未全量同步，暂不能登记该月休息日`;
+  if (!state.can_confirm) return `${state.month} 已生成正式工资条，考勤与公司休息日已锁定，不能修改`;
+  if (state.confirmed) return `${state.month} 考勤已确认，如需修改请先撤销确认`;
+  return "";
+});
+
+/** sync-state 只描述上个月；其它月份仍可登记，最终由后端按日期所属月份逐个硬拦 */
+function isLockedMonth(month?: string) {
+  return !!month && month === syncState.value.month && !restEditable.value;
+}
+
+async function handleConfirmMonth() {
+  if (!syncState.value.month) return;
+  confirming.value = true;
+  try {
+    await AttendanceAPI.confirmMonth(syncState.value.month);
+    await loadSyncState();
+  } finally {
+    confirming.value = false;
+  }
+}
+
+async function handleRevokeConfirm() {
+  if (!syncState.value.month) return;
+  confirming.value = true;
+  try {
+    await AttendanceAPI.revokeMonthConfirm(syncState.value.month);
+    await loadSyncState();
+  } finally {
+    confirming.value = false;
   }
 }
 
@@ -293,9 +398,10 @@ async function handleSync() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await loadBusinessCalendar();
   loadSyncState();
-  loadData();
+  await loadData();
 });
 
 // ── 休息日安排（ADR-0009）──────────────────────────────────
@@ -345,6 +451,12 @@ async function saveRestDays() {
     ElMessage.warning("请选择休息日期");
     return;
   }
+  // ADR-0018：上个月已确认 / 已生成工资条时，前端先拦一次；其它月份照常提交，
+  // 最终由后端按每个日期所属月份逐个硬拦（前端只知道上个月的状态）。
+  if (restForm.value.dates.some((d) => isLockedMonth(d.slice(0, 7)))) {
+    ElMessage.warning(restDisabledReason.value);
+    return;
+  }
   restSaving.value = true;
   try {
     const res = await AttendanceAPI.restDayCreate({
@@ -364,7 +476,7 @@ async function saveRestDays() {
 }
 
 async function removeRestDay(row: RestDayTable) {
-  if (!row.id) return;
+  if (!row.id || isLockedMonth(row.month)) return;
   await AttendanceAPI.restDayDelete([row.id]);
   ElMessage.success("已删除并重算");
   await loadRestDays();
