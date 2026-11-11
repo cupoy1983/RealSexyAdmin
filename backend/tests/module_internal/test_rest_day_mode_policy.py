@@ -27,8 +27,8 @@ from app.plugin.module_internal.salary.model import PayslipModel, SalaryProfileM
 from app.plugin.module_internal.salary.service import SalaryService
 
 MONTH = "2032-05"
-OFFICE = "<见本机运维记录>"
-WAREHOUSE = "330445194"
+OFFICE = "111111111"
+WAREHOUSE = "222222222"
 UNCONFIGURED = "999999999"
 D1, D2, D3 = date(2032, 5, 10), date(2032, 5, 11), date(2032, 5, 12)
 LEAVE_TEXT = "病假05-10 09:00到05-11 18:00 2天"

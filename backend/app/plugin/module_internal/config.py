@@ -2,7 +2,7 @@
 
 配置写在后端 env 文件里，一行 JSON：
 
-    INTERNAL_REST_DAY_POLICY={"<见本机运维记录>":{"mode":1},"330445194":{"mode":2,"money":100}}
+    INTERNAL_REST_DAY_POLICY={"111111111":{"mode":1},"222222222":{"mode":2,"money":100}}
 
 - mode=1（休息）：该组登记公司休息日后按 ADR-0009 现行规则重算考勤
   （应出勤减少、异常清零、日明细显示「公司休息」），不发补贴。
