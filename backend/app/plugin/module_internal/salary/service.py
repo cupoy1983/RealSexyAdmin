@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
@@ -609,8 +610,49 @@ class SalaryService:
         return _money(policy.money * paid_days)
 
     @staticmethod
-    def _calculate(report: MonthlyReportModel, profile: SalaryProfileModel | None, deduction: Decimal, rest_allowance: Decimal = Decimal("0")) -> dict[str, Any]:
-        required = Decimal(str(report.required_days or 0))
+    def _group_required_days(rows: list[tuple[MonthlyReportModel, UserModel]]) -> dict[str, float]:
+        """按考勤组取当月「应出勤」的全组标准值（ADR-0009 A4 / ADR-0011 第十一节）。
+
+        钉钉按人按天返回列值，月中入职 / 未加入考勤组的人只覆盖在职后的日期，
+        个人应出勤会被截短（2026-10 员工辛为 9，同组标准 23）。取同组当月应出勤的
+        **众数**（并列取较大值）作为标准：正常员工的整月值天然是多数，月中入离职的
+        截短值不会污染标准。只用于抬平偏低值，不改考勤月报，也不改 ADR-0009 的重算结果。
+        众数至少要由两行共享才作数，避免并列时把 ADR-0009 休息日重算的合法差异
+        （±1 天）误抬平、改动到正常员工的金额。
+        """
+        bucket: dict[str, list[float]] = {}
+        for report, _ in rows:
+            gid = str(report.group_id or "").strip()
+            if not gid or report.required_days is None:
+                continue
+            bucket.setdefault(gid, []).append(float(report.required_days))
+        result: dict[str, float] = {}
+        for gid, values in bucket.items():
+            counts = Counter(values)
+            top = max(counts.values())
+            if top < 2:
+                logger.warning(f"工资条生成: 考勤组 {gid} 应出勤无明确众数({values})，不做全组抬平，需人工核对")
+                continue
+            result[gid] = max(value for value, count in counts.items() if count == top)
+        return result
+
+    @staticmethod
+    def _calculate(
+        report: MonthlyReportModel,
+        profile: SalaryProfileModel | None,
+        deduction: Decimal,
+        rest_allowance: Decimal = Decimal("0"),
+        *,
+        required_override: float | None = None,
+    ) -> dict[str, Any]:
+        # ADR-0011 第十一节（2026-11-11 修订）：应出勤对全考勤组统一。
+        # 若直接拿被截短的个人 R 当分母，自算 A 也同时被截短，A/R = 1，新人会拿整月工资。
+        # 只把「低于全组标准」的个人 R 抬平；正常值与公司休息日重算后的值一律不动。
+        personal_required = Decimal(str(report.required_days or 0))
+        if required_override is None:
+            required = personal_required
+        else:
+            required = max(personal_required, Decimal(str(required_override)))
         actual = Decimal(str(report.actual_days or 0))
         base_salary = _money(profile.base_salary if profile else 0)
         full_bonus = _money(profile.full_attendance_bonus if profile else 0)
@@ -721,8 +763,18 @@ class SalaryService:
         for row in daily_rows:
             day = row.work_date.date() if isinstance(row.work_date, datetime) else row.work_date
             raw_by_user_date[(row.oa_user_id, day)] = row.raw_text
+        # ADR-0009 A4 / ADR-0011 第十一节：应出勤对全考勤组统一，抬平被钉钉截短的个人值。
+        group_required = self._group_required_days(rows)
         now = datetime.now(UTC)
         for report, user in rows:
+            gid = str(report.group_id or "").strip()
+            required_override = group_required.get(gid)
+            if required_override is not None and float(report.required_days or 0) < required_override:
+                logger.warning(
+                    f"工资条生成: 应出勤按考勤组统一抬平 group={gid} user={report.oa_user_id} "
+                    f"钉钉个人值={report.required_days} → 全组标准={required_override}；"
+                    f"实出勤仍取月报自算值 {report.actual_days}，钉钉漏记的到岗天数需人工核对"
+                )
             profile = profile_map.get(report.oa_user_id)
             rest_allowance = self._rest_allowance(report, policy_map, rest_dates_by_group, raw_by_user_date)
             values = self._calculate(
@@ -730,6 +782,7 @@ class SalaryService:
                 profile,
                 deduction_map.get(report.oa_user_id, Decimal("0")),
                 rest_allowance,
+                required_override=required_override,
             )
             self.db.add(
                 PayslipModel(
