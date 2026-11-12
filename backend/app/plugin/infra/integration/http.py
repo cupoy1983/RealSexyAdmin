@@ -6,7 +6,7 @@
 
 放置约定：本包（`app/plugin/infra`）**不放 controller**。路由发现只扫
 `app/plugin/module_*/**/controller.py`，非 `module_` 目录下的 controller 不会注册，
-且启动时没有任何警告（ADR-0017）。
+且启动时没有任何警告（ADR-0035）。
 """
 
 import json

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 240" role="img" aria-labelledby="title desc">
+  <title id="title">RealSexy logo concept</title>
+  <desc id="desc">A refined burgundy and champagne-gold wordmark with an abstract heart and letter R emblem.</desc>
+  <defs>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7DFA7"/>
+      <stop offset="0.52" stop-color="#C99B52"/>
+      <stop offset="1" stop-color="#8D5B25"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Emblem: two flowing curves suggest an R, a heart, and intimate connection. -->
+  <g transform="translate(26 25)">
+    <path d="M92 8C44 8 12 39 12 82c0 44 34 82 80 112 46-30 80-68 80-112 0-43-32-74-80-74Z"
+      fill="none" stroke="#651E35" stroke-width="9"/>
+    <path d="M92 170V47c0-22-17-35-40-35H25M53 12c39 0 65 18 65 49 0 29-25 47-65 47H25"
+      fill="none" stroke="url(#gold)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M83 108l69 65" fill="none" stroke="url(#gold)" stroke-width="10" stroke-linecap="round"/>
+  </g>
+
+  <g transform="translate(230 70)">
+    <text x="0" y="82" fill="#651E35"
+      font-family="Georgia, 'Times New Roman', serif" font-size="78" font-weight="700"
+      letter-spacing="1.5">Real</text>
+    <text x="285" y="82" fill="url(#gold)"
+      font-family="Georgia, 'Times New Roman', serif" font-size="78" font-weight="700"
+      letter-spacing="1.5">Sexy</text>
+    <path d="M3 104H424" stroke="#651E35" stroke-width="2" opacity=".35"/>
+    <text x="4" y="132" fill="#651E35" opacity=".72" font-family="Arial, sans-serif"
+      font-size="13" letter-spacing="6">INTIMACY · CONFIDENCE · REAL YOU</text>
+  </g>
+</svg>

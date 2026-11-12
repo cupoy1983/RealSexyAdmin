@@ -1,0 +1,42 @@
+{
+  "_readme": [
+    "业务域登记表：本仓库有哪几个可插拔的业务域，以及每个域的术语表与代码领土在哪。",
+    "读者只有一个：scripts/adr.mjs（生成 CONTEXT-MAP.md 与 docs/adr/README.md 时要用这里的 label / code_dirs / context / origin）。",
+    "2026-11-12 统一化之后，这张表**不参与发号，也不参与引用判定**：ADR 全部平铺在 docs/adr/，号全仓一条连续序列，引用一律写 `ADR-<NNNN>`，号前不加域名。",
+    "新建 ADR：`node scripts/adr.mjs new <标题一句话>`。号由工具取全仓下一个，不要手填。",
+    "新增一个业务域 = 在 domains 里加一条 label / code_dirs / context，然后 `node scripts/adr.mjs index` 重写 CONTEXT-MAP.md。",
+    "origin 只用来在索引里交代号段是从哪来的，写完不再变动。"
+  ],
+  "domains": {
+    "ecommerce": {
+      "label": "电商",
+      "code_dirs": [
+        "backend/app/plugin/module_ecommerce",
+        "backend/tests/module_ecommerce",
+        "backend/tests/live/ecommerce",
+        "frontend/web/src/views/module_ecommerce",
+        "frontend/web/src/api/module_ecommerce"
+      ],
+      "context": "CONTEXT.md",
+      "origin": "0019–0039 由旧电商号 0001–0021 各加 18 而来"
+    },
+    "internal": {
+      "label": "内务",
+      "code_dirs": [
+        "backend/app/plugin/module_internal",
+        "backend/tests/module_internal",
+        "backend/tests/live/internal",
+        "frontend/web/src/views/module_internal",
+        "frontend/web/src/api/module_internal"
+      ],
+      "context": "docs/internal/CONTEXT.md",
+      "origin": "0001–0018 从兄弟 clone RealSexy-OA 合并进来，号未改"
+    },
+    "system": {
+      "label": "全局",
+      "code_dirs": [],
+      "context": null,
+      "origin": "不属于任何业务域的决策（框架改动、跨域口径）也直接进 docs/adr/，号同样是全仓往下排"
+    }
+  }
+}

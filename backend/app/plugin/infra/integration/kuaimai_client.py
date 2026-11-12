@@ -1,10 +1,10 @@
 """快麦 ERP API 客户端。
 
-第一期默认订单数据源仍是 Excel 导出（ADR-0009），本客户端作为备用 API 通路实现，
+第一期默认订单数据源仍是 Excel 导出（ADR-0027），本客户端作为备用 API 通路实现，
 供 order 子域的 ``KuaimaiApiSource``（非默认 ``OrderDataSource`` 实现）调用。
 
 发请求与通行证缓存用本包的共用机制（`http.py`）；本文件只保留快麦自己的地址、
-参数与错误措辞。**目前仅电商插件在用**（ADR-0017）。
+参数与错误措辞。**目前仅电商插件在用**（ADR-0035）。
 """
 
 from typing import Any

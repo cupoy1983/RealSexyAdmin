@@ -169,6 +169,14 @@ class Settings(BaseSettings):
     # 节点代码块只调用 app.plugin.module_internal.attendance.service 里预写的 Service。
 
     # ================================================= #
+    # *************** 电商利润集成配置（可选）************** #
+    # ================================================= #
+    KUAIMAI_APP_KEY: str = ""  # 快麦 ERP AppKey
+    KUAIMAI_APP_SECRET: str = ""  # 快麦 ERP AppSecret
+    WECOM_WEBHOOK_URL: str = ""  # 企业微信群机器人 webhook 地址
+    WECOM_WEBHOOK_SECRET: str = ""  # 企业微信群机器人 webhook 密钥
+
+    # ================================================= #
     # ******************* 外部 HTTP（httpx）******************* #
     # ================================================= #
     HTTPX_DEFAULT_TIMEOUT: float = 10.0  # 对外 HTTP 请求默认超时（秒）

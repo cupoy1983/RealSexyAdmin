@@ -1,0 +1,9 @@
+# 插件元数据（可选）：供文档、运维与 module_application.portal 展示使用。
+# 不用于运行时 pip 安装依赖；依赖见仓库根目录 pyproject.toml / uv.lock。
+
+name = "ecommerce"
+title = "电商店铺利润"
+version = "1.0.0"
+description = "电商小团队店铺月度利润核算：订单、商品成本、快递运费、间接成本分摊、结算门禁与锁定。"
+optional = true
+tags = ["ecommerce", "profit"]

@@ -381,7 +381,6 @@ onMounted(() => {
 
 /* Primary gradient button */
 .btn-primary-gradient {
-
   background: linear-gradient(135deg, var(--el-color-primary, #409eff), #79bbff) !important;
   border: none !important;
   transition:

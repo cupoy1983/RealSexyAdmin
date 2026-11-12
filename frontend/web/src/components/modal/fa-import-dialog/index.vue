@@ -18,6 +18,10 @@
           :model="importFormData"
           :rules="importFormRules"
         >
+          <!-- 调用方可在此放自己的必填项（如发货月份）；不传就不渲染，其它页面照旧 -->
+          <template v-if="$slots.form">
+            <slot name="form" />
+          </template>
           <ElFormItem prop="files">
             <ElUpload
               ref="uploadRef"
@@ -62,7 +66,7 @@
           <ElButton @click="handleClose">{{ props.cancelButtonText || "取 消" }}</ElButton>
           <ElButton
             type="primary"
-            :disabled="importFormData.files.length === 0 || props.loading"
+            :disabled="importFormData.files.length === 0 || props.loading || props.confirmDisabled"
             :loading="props.loading"
             @click="handleUpload"
           >
@@ -177,6 +181,11 @@ interface Props {
    * 上传loading状态
    */
   loading?: boolean;
+
+  /**
+   * 调用方自己的必填项还没填完时为 true（如发货月份/账单类型），确认按钮一并禁掉
+   */
+  confirmDisabled?: boolean;
 }
 
 // 定义props

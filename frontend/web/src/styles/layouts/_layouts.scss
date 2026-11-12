@@ -43,6 +43,9 @@
       min-height: 0;
       padding: 20px;
       overflow: auto;
+      // 预留滚动条槽位：内容高度临界时滚动条忽隐忽现会让可用宽度跟着抖动，
+      // 牵连子元素（搜索栏、表格 fit 布局）左右跳动，固定预留后宽度恒定
+      scrollbar-gutter: stable;
 
       .layout-content {
         box-sizing: border-box;
@@ -57,6 +60,7 @@
           min-height: 0;
           padding: 20px;
           overflow: hidden auto;
+          scrollbar-gutter: stable;
           background: var(--default-box-color);
           border-radius: calc(var(--custom-radius) / 2 + 2px) !important;
         }

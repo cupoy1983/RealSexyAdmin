@@ -691,7 +691,10 @@ const sourceDialogFormItems = computed<FormItem[]>(() => {
         props: {
           placeholder: "请选择或输入区域",
           // ElOption 只认 { label, value }：直接传字符串会展开成下标属性、value 缺省被布尔转为 false，导致选项显示 "false"
-          options: (regionDict[p]?.options ?? []).map((region) => ({ label: region, value: region })),
+          options: (regionDict[p]?.options ?? []).map((region) => ({
+            label: region,
+            value: region,
+          })),
           filterable: true,
           allowCreate: true,
         },

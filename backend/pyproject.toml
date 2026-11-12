@@ -141,3 +141,5 @@ line-ending = "auto"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# tests/live/ 里的脚本连本机 dev 库和真实业务数据，CI 上没有；见 backend/tests/live/README.md
+norecursedirs = [".*", "build", "dist", "CVS", "_darcs", "{arch}", "venv", "*.egg", "live"]
