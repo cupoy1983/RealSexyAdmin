@@ -74,6 +74,7 @@ cd /mnt/disk/workspace/RealSexyAdmin
 git pull --ff-only
 cd docker
 docker compose -f docker-compose.prod.yaml up -d --build
+docker compose -f docker-compose.prod.yaml ps
 ```
 
 只改后端环境变量（`backend/env/.env.prod`，不进 Git，所以 `git pull` 更新不到它）：
@@ -92,7 +93,7 @@ pnpm run build
 scp -r dist/. root@<外网 OpenResty 主机>:/srv/RealSexyAdmin/
 ```
 
-主机地址与账号进本机运维记录，**不写进仓库**。依赖变化时先 `pnpm install` 再 build；改 `.env.production` 后必须重新构建并上传。含数据库结构变更时按迁移流程执行对应 Alembic 迁移，先读迁移内容再跑。
+主机地址与账号进本机运维记录，**不写进仓库**。依赖变化时先 `pnpm install` 再 build；改 `.env.production` 后必须重新构建并上传。含数据库结构变更时按迁移流程执行对应 Alembic 迁移，先读迁移内容再跑。上传后浏览器仍是旧内容，先查浏览器缓存和 OpenResty 实际服务的站点目录，别急着回滚构建。
 
 ## 架构约定
 
@@ -120,6 +121,13 @@ scp -r dist/. root@<外网 OpenResty 主机>:/srv/RealSexyAdmin/
 - 未经明确允许不修改其他项目或其他工作目录。
 - 声称成功前用对应项目命令验证；没跑就明说没验。涉及库的验证脚本必须靠 `close()` 回滚（教训：2026-10-20 污染过 dev 库）。
 - 部署与环境敏感的工作以实际生产配置为准，不猜默认值。
+
+## 贡献者须知
+
+- 根 `README.md` 讲完整技术栈、默认认证账号、模块启用方式、部署模型与环境要求。
+- `backend/README.md` 讲 API 启动、迁移与 ORM 序列化预期。
+- `frontend/web/README.md` 讲环境变量、路由行为与本地开发生命周期。
+- **本仓库支持可选模块**：代码生成、任务、聊天、存储这些功能靠后端配置切换启用与否，**不需要把它们从代码库里删掉**；要摘某个业务域时删的只是 `module_<域>` 那一对目录与它的文档。
 
 ## ADR：一条全局序列，号由工具发
 
