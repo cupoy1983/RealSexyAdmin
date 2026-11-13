@@ -176,7 +176,7 @@ node scripts/alembic-heads.mjs    # 迁移历史只许一个 head；--versions-d
 
 两个 head 不是整洁问题：框架四处写死 `"head"`，`init_db()` 又在启动里无条件跑，`upgrade head` 在 alembic 解析阶段就抛 `CommandError` → 应用起不来。双根照旧合法（`ADR-0040` 保留电商链与内务链各自的根），所以闸只数 head，外加一条"每份的 `down_revision` 指得到真实文件"。红了的修法是补一个不含 DDL 的合并点：`cd backend && uv run alembic merge -m "并头" <head1> <head2>`（框架 CLI 只包了 `run`／`revision`／`upgrade`，没有 `merge`），库里表已齐的那一侧随后 `stamp head` 只登记。闸自己 2026-11-13 校准过：真库 32 份迁移绿，7 个 Temp 夹具里 4 条红路（双头／悬空父／读不懂的文件／重号）全响、2 条绿路不误报。
 
-`.github/workflows/docs-adr.yml` 跑的是这五步（第 5 步 `alembic-heads.mjs` 于 2026-11-13 加入，它自己还没有远端样本），**前四步已经上线并跑绿**（实测三次：`b354d0e9`、`f0d1c38e`、`6f7ed8b4`（2026-11-13 术语表统一那一轮）各触发一次 `docs-adr`，conclusion 都是 `success`；那三次跑的是四步时代的 workflow；CI 那侧第 4 步天然就是发布前的检查点）。工具链（`scripts/`、`.github/`、`docs/agents/`、`CONTEXT-MAP.md`）和这份 `AGENTS.md` 都已进库，两份术语表从 `6f7ed8b4` 起统一住在 `docs/<域>/CONTEXT.md`（格式规矩见 `docs/agents/shared-rules.md` §3.1），对面 clone `git pull` 之后自己就有闸可跑。唯一还没样本的是 `pull_request` 触发路径（三次都由 push 触发）。逐条实测见 `docs/agents/shared-rules.md` §1.4。
+`.github/workflows/docs-adr.yml` 跑的是这五步（第 5 步 `alembic-heads.mjs` 于 2026-11-13 加入，**第一次真在 CI 上跑过是 2026-11-14 由 `f15eae7c` 触发那一次**，逐 step 量到 `success`），**前四步早就上线并跑绿**（实测三次：`b354d0e9`、`f0d1c38e`、`6f7ed8b4`（2026-11-13 术语表统一那一轮）各触发一次 `docs-adr`，conclusion 都是 `success`；那三次跑的是四步时代的 workflow；CI 那侧第 4 步天然就是发布前的检查点）。**这份文件不抄运行总数**——那个数每推一次涨一次，要现状就现查 Actions。工具链（`scripts/`、`.github/`、`docs/agents/`、`CONTEXT-MAP.md`）和这份 `AGENTS.md` 都已进库，两份术语表从 `6f7ed8b4` 起统一住在 `docs/<域>/CONTEXT.md`（格式规矩见 `docs/agents/shared-rules.md` §3.1），对面 clone `git pull` 之后自己就有闸可跑。唯一还没样本的是 `pull_request` 触发路径（三次都由 push 触发）。逐条实测见 `docs/agents/shared-rules.md` §1.4。
 
 ## 敏感信息（一句话口径）
 
