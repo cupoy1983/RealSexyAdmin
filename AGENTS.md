@@ -30,6 +30,8 @@ uv run main.py upgrade --env=dev
 
 ⚠️ dev 启动会**自动生成并自动应用**迁移，改 model 前先确认这不是你要的产物。
 
+迁移历史是**两个根、一个合并点**：电商链与内务链各自从自己的根长出来，靠一个不含 DDL 的合并点收成单一 `head`，所以 `head` 这个写法可用（`ADR-0040`）。口径是**同一个库装两个域**，只靠表前缀分：库里两域的表已经齐 → 用 `stamp` 只登记、别让迁移再建一遍（`op.create_table` 不带 `IF NOT EXISTS`，会撞 duplicate）；缺哪个域的表 → 正常 `upgrade`，让迁移去建。
+
 ### 前端
 
 用 pnpm，且写全 `pnpm run <脚本>`（简写在审批时会变卦）：
