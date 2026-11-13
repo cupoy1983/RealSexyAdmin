@@ -46,7 +46,7 @@ Because the sequence is repo-wide, the sibling clone `../RealSexy-OA` (same remo
 - Any agent that touches `docs/`, `CONTEXT*.md` or an ADR citation runs `node scripts/adr.mjs check` before claiming success.
 - `CONTEXT-MAP.md` and `docs/adr/README.md` are generated output: a hand edit there is a bug, not a formatting choice. Re-run `index`.
 - Before a merge or a handoff to the sibling clone, compare their highest ADR number with ours — with one shared sequence an uncoordinated `new` on either side is a collision.
-- CI **is live**: `docs-adr` runs the same four commands on every push to `master` (green on `b354d0e9` and `f0d1c38e`, 2026-11-13). It does not replace the local run — CI only speaks after the push. The `pull_request` trigger is configured but has no sample yet. Full cross-project contract: `docs/agents/shared-rules.md` (§1).
+- CI **is live**: `docs-adr` runs the same four commands on every push to `master` (green on `b354d0e9`, `f0d1c38e` and `6f7ed8b4`, 2026-11-13). It does not replace the local run — CI only speaks after the push. The `pull_request` trigger is configured but has no sample yet. Full cross-project contract: `docs/agents/shared-rules.md` (§1).
 
 ## Use the glossary's vocabulary
 
