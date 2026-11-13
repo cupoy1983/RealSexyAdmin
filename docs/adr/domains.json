@@ -5,6 +5,7 @@
     "2026-11-12 统一化之后，这张表**不参与发号，也不参与引用判定**：ADR 全部平铺在 docs/adr/，号全仓一条连续序列，引用一律写 `ADR-<NNNN>`，号前不加域名。",
     "新建 ADR：`node scripts/adr.mjs new <标题一句话>`。号由工具取全仓下一个，不要手填。",
     "新增一个业务域 = 在 domains 里加一条 label / code_dirs / context，然后 `node scripts/adr.mjs index` 重写 CONTEXT-MAP.md。",
+    "context 写的是该域术语表的真实路径，格式规矩见 shared-rules §3.1。2026-11-13 起两边统一为 docs/<域>/CONTEXT.md（D5 已执行：电商那份原在根 CONTEXT.md，内务那份原在根 GLOSSARY.md，随 OA 合并而来）。`adr.mjs check` 报「这些域还没建术语表」判的就是这里写的路径在不在，`SCAN_DIRS` 里的 docs 那一趟遍历负责把词表本身扫进引用校验。",
     "origin 只用来在索引里交代号段是从哪来的，写完不再变动。"
   ],
   "domains": {
@@ -17,7 +18,7 @@
         "frontend/web/src/views/module_ecommerce",
         "frontend/web/src/api/module_ecommerce"
       ],
-      "context": "CONTEXT.md",
+      "context": "docs/ecommerce/CONTEXT.md",
       "origin": "0019–0039 由旧电商号 0001–0021 各加 18 而来"
     },
     "internal": {

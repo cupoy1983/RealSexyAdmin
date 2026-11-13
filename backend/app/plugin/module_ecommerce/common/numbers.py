@@ -59,7 +59,7 @@ def round_cost(value: Decimal) -> Decimal:
     的成本价不走这里——它 2026-11-06 收成 2 位，录入侧由 ``over_cent`` 直接拒收第 3 位。
     留 4 位的理由是「别人报给我们的凭据要留原值」：把 `5.0552` 整成 `5.06` 正好抹掉比对
     告警要提示的那一半。**但读 5 位的原值去比库里 4 位的值**会报一条假的「成本价不一致」
-    告警，所以照样在读取那一步就整到 4 位（见 CONTEXT.md「成本价」）。
+    告警，所以照样在读取那一步就整到 4 位（见 docs/ecommerce/CONTEXT.md「成本价」）。
     """
     return quantize_half_up(value, COST_QUANT)
 

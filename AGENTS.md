@@ -156,7 +156,7 @@ node scripts/pii.mjs              # 可识别到个人的真实信息；--selfte
 
 理由：这仓是 public fork，敏感值一旦提交就从"能改"变成"要重写历史才能撤"——那一秒是这道闸唯一值钱的地方；平时的控制点是 §3.4 那条"agent 不写"。它现在 0 命中，不挡任何路。**主控制仍是写作规矩，不给它加新规则**；命中只有「改」一条路（豁免底账 `scripts/pii-waivers.json` 已删除，`--record` 也随之拆掉）。
 
-`.github/workflows/docs-adr.yml` 跑的就是这四步（CI 那侧第 4 步天然就是发布前的检查点），**但还没上线**：工具链那批文件（`scripts/`、`.github/`、`docs/agents/`、`CONTEXT*.md`、这份 `AGENTS.md`）从未提交，对面 clone 的 agent 因此手里没闸；fork 的 Actions 还要业务方在 GitHub Settings 启用。现状与阻塞清单见 `docs/agents/shared-rules.md` §1.4。
+`.github/workflows/docs-adr.yml` 跑的就是这四步，**已经上线并跑绿**（2026-11-13 实测：`b354d0e9` 与 `f0d1c38e` 两次 push 各触发一次 `docs-adr`，conclusion 都是 `success`；CI 那侧第 4 步天然就是发布前的检查点）。工具链（`scripts/`、`.github/`、`docs/agents/`、`CONTEXT*.md`）和这份 `AGENTS.md` 都已进库，对面 clone `git pull` 之后自己就有闸可跑。唯一还没样本的是 `pull_request` 触发路径（那两次都由 push 触发）。逐条实测见 `docs/agents/shared-rules.md` §1.4。
 
 ## 敏感信息（一句话口径）
 

@@ -28,7 +28,9 @@ const CONTEXT_MAP_PATH = join(ROOT, "CONTEXT-MAP.md");
 
 // 引用扫描范围：文档 + 代码，一处不漏
 const SCAN_DIRS = ["docs", "backend/app", "backend/tests", "frontend/web/src"];
-const SCAN_FILES = ["CONTEXT.md", "GLOSSARY.md", "AGENTS.md", "README.md", "CONTRIBUTING.md", "REQUIREMENTS.md"];
+// 2026-11-13 D5：术语表统一住 docs/<域>/CONTEXT.md，已被上面 docs 那一趟遍历覆盖，不再进根级清单。
+// 以前这里是 ["CONTEXT.md", "GLOSSARY.md", ...]，两份词表一名一姓、一处一个，根级清单就是它们的户口本。
+const SCAN_FILES = ["AGENTS.md", "README.md", "CONTRIBUTING.md", "REQUIREMENTS.md"];
 // 工具自己生成的文件不参与扫描，否则索引里那一堆号会被当成引用
 const SKIP_FILES = new Set(["docs/adr/README.md", "docs/adr/domains.json", "CONTEXT-MAP.md"]);
 const SKIP_DIR_PREFIXES = ["node_modules", "__pycache__", "dist", ".git", ".backup", ".workbuddy", ".codebuddy", ".agent", ".tmp_", ".plan"];

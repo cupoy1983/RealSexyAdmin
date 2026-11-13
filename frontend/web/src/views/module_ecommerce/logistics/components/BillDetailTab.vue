@@ -901,7 +901,7 @@ function disabledBillMonth(date: Date): boolean {
 }
 
 /**
- * 可查询月份窗口=本月往前 12 个整月、不含本月及以后（CONTEXT.md「可查询月份窗口」）。
+ * 可查询月份窗口=本月往前 12 个整月、不含本月及以后（docs/ecommerce/CONTEXT.md「可查询月份窗口」）。
  * 窗口 ⊇ 可导入窗口；账单最快次月出，所以本月压根没有批次。超期的账要翻走 SQL（AE16 + AE22 甲）。
  */
 function disabledQueryMonth(date: Date): boolean {

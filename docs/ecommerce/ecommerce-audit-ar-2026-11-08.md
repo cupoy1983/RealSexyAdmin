@@ -1,6 +1,6 @@
 # AR 轮审计报告 · 利润模块开工前（2026-11-08）
 
-审计范围：`backend/app/plugin/module_ecommerce/` 全部业务代码 + `frontend/web/src/views/module_ecommerce/` + `docs/ecommerce-profit-phase1-design.md`（§1–§27）+ `docs/adr/0019–0039`（审计当时那 21 份还叫 `docs/adr/ecommerce/0001–0021`，2026-11-12 统一化后平铺并各加 18）+ `CONTEXT.md`。
+审计范围：`backend/app/plugin/module_ecommerce/` 全部业务代码 + `frontend/web/src/views/module_ecommerce/` + `docs/ecommerce-profit-phase1-design.md`（§1–§27）+ `docs/adr/0019–0039`（审计当时那 21 份还叫 `docs/adr/ecommerce/0001–0021`，2026-11-12 统一化后平铺并各加 18）+ `docs/ecommerce/CONTEXT.md`。
 
 方法：五路子代理并行扫（约 40 条疑点）→ 逐条亲自读码复核 → 9 个只读探针（全部事务内 `rollback`，脚本在 `%TEMP%\probe_ar_*.py`）。子代理结论中 **3 条被推翻、4 条改了级别**，单独记在 §6，不进缺陷清单。
 
@@ -251,4 +251,5 @@ Python 侧精确比字符串（[:241-251](../../backend/app/plugin/module_ecomme
 3. 拍板 **AR1–AR9**，再动 `cost` / `profit` 两个子域的代码。
 4. AR缺14 / AR缺15 属框架侧，按约定本轮不动，只把约束写进文档。
 
-**提醒**：第一期全部产出（`CONTEXT.md`、`module_ecommerce/` 前后端、`docs/`、17 个 alembic 版本）**至今仍未提交**，git 那边按约定归业务方。利润模块一旦动模型，回不去的就是这一大片。
+**提醒**：第一期全部产出（`docs/ecommerce/CONTEXT.md`、`module_ecommerce/` 前后端、`docs/`、17 个 alembic 版本）**至今仍未提交**，git 那边按约定归业务方。利润模块一旦动模型，回不去的就是这一大片。
+> **2026-11-13 订正**：这一句写的是审计当天的状态，已经不成立——那批产出（含电商 38 个后端文件、工具链与 `docs/ecommerce/CONTEXT.md`）随 `b354d0e9` 提交并推送，`f0d1c38e` 补了 `AGENTS.md` 三处，远端 `docs-adr` 两次都跑绿。上面那条「动模型就回不去」的判断照旧有效。
