@@ -1,8 +1,8 @@
 name: docs-adr
 
-# ADR 号段、引用可解析、相对链接、生成物有没有被手改，以及有没有把真实姓名／手机号／订单号写进代码与文档。
+# ADR 号段、引用可解析、相对链接、生成物有没有被手改、有没有把真实姓名／手机号／订单号写进代码与文档，以及迁移历史有没有收成单一 head。
 # 故意不加 paths 过滤：引用就写在 .py / .ts / .vue 的注释里，任何代码 PR 都必须过这一关。
-# 本地等价执行：同样这四条命令（见 docs/agents/shared-rules.md §1.4 与 §3.4）。
+# 本地等价执行：同样这几条命令（见 docs/agents/shared-rules.md §1.4 与 §3.4）；`alembic-heads.mjs` 本地只在动到迁移目录时跑，CI 每次都跑。
 
 on:
   pull_request:
@@ -44,3 +44,7 @@ jobs:
       # 规则正文见 docs/agents/shared-rules.md §3.4。豁免底账已在 2026-11-12 降到 0 条并删除，此后命中只有「改」一条路。
       - name: 可识别到个人的真实信息（姓名 / 手机号 / 订单号 / 本机路径）
         run: node scripts/pii.mjs
+
+      # 两个 head 会让框架的 upgrade("head") 在解析阶段抛错、应用起不来（口径见 ADR-0040）。
+      - name: 迁移历史只许一个 head
+        run: node scripts/alembic-heads.mjs

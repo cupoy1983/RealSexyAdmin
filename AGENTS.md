@@ -10,6 +10,16 @@ FastApiAdmin 单体仓库，全栈管理平台：
 
 以项目文档为真相来源：[README.md](README.md)、[backend/README.md](backend/README.md)、[frontend/web/README.md](frontend/web/README.md)。`REQUIREMENTS.md`、`CONTRIBUTING.md`、`CHANGELOG.md`、`SKILL.md` 是**上游基线文档，不是我们的需求**（`docs/agents/shared-rules.md` §3.3）；真实需求在 `docs/<域>/` 与 ADR 里。
 
+## 这仓是上游框架的 fork
+
+上游是 FastApiAdmin，业务是在它基础上加和改，**以后还要从上游拉更新**（业务方 2026-11-13 定）。由此推出三条：
+
+- **上游自带的文件保持与上游一字不差**：不搬、不改名、不删——尤其那四份基线文档。删掉或挪走不会少一块信息（git 历史里一直都在），却会在每次同步时制造 rename／delete 冲突；`CHANGELOG.md` 停在 `3.0.0` 也不要替它续账，我们的变更史在 git 里。
+- **业务代码只放 `backend/app/plugin/module_<域>/`**（前端同理），框架目录零改动是有意为之，不是巧合：上游一动，我们要的是一条干净的 merge。
+- **同步由业务方主导**：什么时候拉、怎么合、已动过哪些框架文件（那些改动都经他同意），都由他掌握。agent 不主动发起同步，也不为同步预先做"撞点清单"这类工程。
+
+`REQUIREMENTS.md` 那 3135 行标题就是「SaaS 多租户平台需求文档」——那是上游那个产品的需求，**不许从它推我们的需求，也不许照它改代码**。
+
 ## 默认工作流
 
 ### 后端
@@ -30,7 +40,7 @@ uv run main.py upgrade --env=dev
 
 ⚠️ dev 启动会**自动生成并自动应用**迁移，改 model 前先确认这不是你要的产物。
 
-迁移历史是**两个根、一个合并点**：电商链与内务链各自从自己的根长出来，靠一个不含 DDL 的合并点收成单一 `head`，所以 `head` 这个写法可用（`ADR-0040`）。口径是**同一个库装两个域**，只靠表前缀分：库里两域的表已经齐 → 用 `stamp` 只登记、别让迁移再建一遍（`op.create_table` 不带 `IF NOT EXISTS`，会撞 duplicate）；缺哪个域的表 → 正常 `upgrade`，让迁移去建。
+迁移历史是**两个根、一个合并点**：电商链与内务链各自从自己的根长出来，靠一个不含 DDL 的合并点收成单一 `head`，所以 `head` 这个写法可用（`ADR-0040`）。口径是**同一个库装两个域**，只靠表前缀分：库里两域的表已经齐 → 用 `stamp` 只登记、别让迁移再建一遍（`op.create_table` 不带 `IF NOT EXISTS`，会撞 duplicate）；缺哪个域的表 → 正常 `upgrade`，让迁移去建。这条不变量有机器闸：`node scripts/alembic-heads.mjs`（见下面「闸」那一节）。
 
 ### 前端
 
@@ -133,14 +143,14 @@ scp -r dist/. root@<外网 OpenResty 主机>:/srv/RealSexyAdmin/
 
 ## ADR：一条全局序列，号由工具发
 
-- **号全仓唯一，平铺在 `docs/adr/`**，当前 `0001–0039`（`0001–0018` 内务、`0019–0039` 电商，旧电商号各加 18）。没有分域目录，也没有 `reserve_upto`。
+- **号全仓唯一，平铺在 `docs/adr/`**：`0001–0018` 内务、`0019–0039` 电商（旧电商号各加 18），**`0040` 起是跨域／仓库级**（迁移链口径、上游同步、多 agent 共用规则）。**序列到几号以生成物 `docs/adr/README.md` 为准，这份文件不抄当前最大值**——抄了就是每加一条 ADR 过期一次。没有分域目录，也没有 `reserve_upto`。
 - **永远不要手敲 ADR 号**：`node scripts/adr.mjs new <标题一句话>` 建文件并打印可粘贴的引用。`renumber` 只用于刚建、还没被任何地方引用过的条目。
 - **引用只有一种形式 `ADR-<NNNN>`**，号前不加域名（`电商ADR-…` 这种旧写法 `check` 直接报错）。要说属于哪个域用正文说。
 - `docs/adr/domains.json` 是唯一手维护的文件，现在只是**模块登记表**（域名 → 代码目录 → 术语表），与编号无关。
 - `docs/adr/README.md` 与 `CONTEXT-MAP.md` 是生成物，手改视为违规，重跑 `index`。
 - 判不出某条决策属于哪个域 → 停下来问，不许猜号。已定决议要变更，先商量再动工，不许静默覆盖（`docs/agents/shared-rules.md` §4.1）。
 
-## 闸：日常三条，提交前加一条
+## 闸：日常三条，另两条看时机
 
 **改完 `docs/`、`CONTEXT*.md`、ADR 引用或任何文本文件，立刻跑这三条**（CI 也跑它们）：
 
@@ -158,7 +168,15 @@ node scripts/pii.mjs              # 可识别到个人的真实信息；--selfte
 
 理由：这仓是 public fork，敏感值一旦提交就从"能改"变成"要重写历史才能撤"——那一秒是这道闸唯一值钱的地方；平时的控制点是 §3.4 那条"agent 不写"。它现在 0 命中，不挡任何路。**主控制仍是写作规矩，不给它加新规则**；命中只有「改」一条路（豁免底账 `scripts/pii-waivers.json` 已删除，`--record` 也随之拆掉）。
 
-`.github/workflows/docs-adr.yml` 跑的就是这四步，**已经上线并跑绿**（实测三次：`b354d0e9`、`f0d1c38e`、`6f7ed8b4`（2026-11-13 术语表统一那一轮）各触发一次 `docs-adr`，conclusion 都是 `success`；CI 那侧第 4 步天然就是发布前的检查点）。工具链（`scripts/`、`.github/`、`docs/agents/`、`CONTEXT-MAP.md`）和这份 `AGENTS.md` 都已进库，两份术语表从 `6f7ed8b4` 起统一住在 `docs/<域>/CONTEXT.md`（格式规矩见 `docs/agents/shared-rules.md` §3.1），对面 clone `git pull` 之后自己就有闸可跑。唯一还没样本的是 `pull_request` 触发路径（三次都由 push 触发）。逐条实测见 `docs/agents/shared-rules.md` §1.4。
+**动到 `backend/app/alembic/versions/` 时，再跑第四条**（业务方 2026-11-13 按 AV1–AV4 拍板）：
+
+```bash
+node scripts/alembic-heads.mjs    # 迁移历史只许一个 head；--versions-dir 指到夹具可验闸自己
+```
+
+两个 head 不是整洁问题：框架四处写死 `"head"`，`init_db()` 又在启动里无条件跑，`upgrade head` 在 alembic 解析阶段就抛 `CommandError` → 应用起不来。双根照旧合法（`ADR-0040` 保留电商链与内务链各自的根），所以闸只数 head，外加一条"每份的 `down_revision` 指得到真实文件"。红了的修法是补一个不含 DDL 的合并点：`cd backend && uv run alembic merge -m "并头" <head1> <head2>`（框架 CLI 只包了 `run`／`revision`／`upgrade`，没有 `merge`），库里表已齐的那一侧随后 `stamp head` 只登记。闸自己 2026-11-13 校准过：真库 32 份迁移绿，7 个 Temp 夹具里 4 条红路（双头／悬空父／读不懂的文件／重号）全响、2 条绿路不误报。
+
+`.github/workflows/docs-adr.yml` 跑的是这五步（第 5 步 `alembic-heads.mjs` 于 2026-11-13 加入，它自己还没有远端样本），**前四步已经上线并跑绿**（实测三次：`b354d0e9`、`f0d1c38e`、`6f7ed8b4`（2026-11-13 术语表统一那一轮）各触发一次 `docs-adr`，conclusion 都是 `success`；那三次跑的是四步时代的 workflow；CI 那侧第 4 步天然就是发布前的检查点）。工具链（`scripts/`、`.github/`、`docs/agents/`、`CONTEXT-MAP.md`）和这份 `AGENTS.md` 都已进库，两份术语表从 `6f7ed8b4` 起统一住在 `docs/<域>/CONTEXT.md`（格式规矩见 `docs/agents/shared-rules.md` §3.1），对面 clone `git pull` 之后自己就有闸可跑。唯一还没样本的是 `pull_request` 触发路径（三次都由 push 触发）。逐条实测见 `docs/agents/shared-rules.md` §1.4。
 
 ## 敏感信息（一句话口径）
 
@@ -169,4 +187,4 @@ node scripts/pii.mjs              # 可识别到个人的真实信息；--selfte
 - **Issue 追踪器**：工单以 GitHub issues 存在于 `cupoy1983/RealSexyAdmin`，用 `gh` CLI 管理 → `docs/agents/issue-tracker.md`。
 - **分类标签**：五个标准标签 `needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix` → `docs/agents/triage-labels.md`。
 - **领域文档**：多上下文布局，根 `CONTEXT-MAP.md` 指向各域术语表与代码目录 → `docs/agents/domain.md`（读它决定探索代码前先加载哪份 ADR 与术语表）。
-- **与 RealSexy-OA 的通用规则**：`docs/agents/shared-rules.md` 是两个 agent 共用的约定（ADR 工具与 CI、编码硬线、文档布局、提问与问题编号规则），外加一张「两边现状差异 + 各自还要改什么」的清单。提出需要对方也遵守的约定前先读它。
+- **所有 agent 共用的规则**：`docs/agents/shared-rules.md` 是**在这个仓库上干活的任何 agent**都遵守的同一套约定（ADR 工具与 CI、编码硬线、文档布局、提问与问题编号规则），外加一张「各检出现状差异 + 还要改什么」的清单。业务方 2026-11-13 定的口径是「代码仓库就一个，大家一起开发不同的功能，所有 agent 用同一套约束」→ 决议见 `ADR-0042`。**要新增或修改约定时，改的是这个仓库里的这两份文件，不要写进任何本机笔记**；改 `AGENTS.md`、`scripts/*.mjs`、`docs/agents/**`、`docs/adr/domains.json`、`.github/workflows/**` 之前逐条点头（`shared-rules.md` §4.3）。提出需要别人也遵守的约定前先读它。

@@ -53,8 +53,9 @@
 - 离线可解析：`as_revision_number("head")` 返回单个号，不再抛 `CommandError`。
 - 每个库升级/登记完成后，`alembic_version` 里**只有合并点这一行**（多 head 期间它可能有两行，并头之后就该收敛成一行）。
 - 本仓 dev 库：`upgrade` 后 `iac_*` 10 张到位，且电商 9 张的行数与列定义逐张不变（这条是"没误伤对方域"的证明，不是"建出来了"的证明）。
+- 机器闸判绿并且会响：`node scripts/alembic-heads.mjs` 报「32 份迁移，2 个根收成单一 head `50835315a871`」，与 `alembic heads` 一致；造一个双头夹具时它必须退 1（2026-11-13 自校准 7 例：4 条红路全响、2 条绿路不误报）。
 
 ## 还没做、也不属于本条的事
 
-- **把"只许一个 head"做成机器闸**（CI 里加一步数 head，或并进 `scripts/adr.mjs check`）：那要动两边共用的机制文件（`scripts/*.mjs` 或 `.github/workflows/docs-adr.yml`），按 `docs/agents/shared-rules.md` §4.3 的规矩得逐条点头，登记在治理队列第 4 条，不在本条里顺手做。
+- ~~把"只许一个 head"做成机器闸~~ **已落地（2026-11-13，同一天）**：`scripts/alembic-heads.mjs`，作 `.github/workflows/docs-adr.yml` 第 5 步。当时挂着的三个岔路都由业务方点头定死了——独立脚本而不是并进 `scripts/adr.mjs check`；纯 node 解析 `down_revision` 而不是在 CI 里装 python 跑 `alembic heads`（代价是解析器自己得校准，所以**读不懂的迁移文件一律报错**，不许静默跳过）；断言只有两条——head 数为 1、每个 `down_revision` 指得到真实文件，**不锁 root 数**（以后开第三个域会合法长出新根）、**不锁"合并点不许带 DDL"**（那是本条这次的历史事实，不是不变量）。PR 分支落后 master 造成的双头**不预留口子**：那种红要求的动作正是本节第 4 条说的并头。逐条实测与出场时机见 `docs/agents/shared-rules.md` §1.4。
 - 上游那套 dev 启动自动生成并自动应用迁移的行为照旧（`AGENTS.md` 已警告），本条不撤这个机制，只保证它产出的迁移落在单头上。

@@ -47,5 +47,7 @@
 | ADR-0038 | Excel 表头行由业务侧解析器自动定位，不改框架的 `ExcelUtil` | （未标） | [0038-excel-header-row-auto-detect.md](./0038-excel-header-row-auto-detect.md) |
 | ADR-0039 | 数值格子在「读文件那一步」就量化到它落库列的精度，方向写死 | （未标） | [0039-numeric-cell-quantized-at-parse.md](./0039-numeric-cell-quantized-at-parse.md) |
 | ADR-0040 | 电商与内务两套迁移链保留双根、用一个无 DDL 合并点收成单一 head | 已采纳（2026-11-13） | [0040-two-alembic-chains-one-empty-merge-head.md](./0040-two-alembic-chains-one-empty-merge-head.md) |
+| ADR-0041 | 本仓保持与上游 FastApiAdmin 可同步：上游自带文件一字不动 | 已采纳（2026-11-13） | [0041-keep-upstream-files-byte-identical.md](./0041-keep-upstream-files-byte-identical.md) |
+| ADR-0042 | 一个仓库一份规则：所有在这个仓库上干活的 agent 受同一套约束 | 已采纳（2026-11-13） | [0042-one-repo-one-rulebook-all-agents-share-the-same-constraints.md](./0042-one-repo-one-rulebook-all-agents-share-the-same-constraints.md) |
 
 > 号段来源：电商 0019–0039 由旧电商号 0001–0021 各加 18 而来；内务 0001–0018 从兄弟 clone RealSexy-OA 合并进来，号未改；全局 不属于任何业务域的决策（框架改动、跨域口径）也直接进 docs/adr/，号同样是全仓往下排。2026-11-12 统一化之前的电商号 = 现号减 18，读那之前的老句子时用。
