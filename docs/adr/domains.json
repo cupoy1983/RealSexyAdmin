@@ -36,7 +36,7 @@
     "system": {
       "label": "全局",
       "code_dirs": [],
-      "context": null,
+      "context": "docs/system/CONTEXT.md",
       "origin": "不属于任何业务域的决策（框架改动、跨域口径）也直接进 docs/adr/，号同样是全仓往下排"
     }
   }

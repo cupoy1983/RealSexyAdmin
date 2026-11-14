@@ -21,6 +21,7 @@ This repo is **multi-context**: several business domains share one FastApiAdmin 
 ├── docs/
 │   ├── ecommerce/                     ← 电商: CONTEXT.md (glossary) + design docs and audits
 │   ├── internal/                      ← 内务: CONTEXT.md (glossary) + design docs and audits
+│   ├── system/                        ← 全局: CONTEXT.md (cross-domain vocabulary, no code territory)
 │   └── adr/
 │       ├── domains.json               ← the only hand-maintained file here: domain list, labels, glossary + code paths
 │       ├── README.md                  ← generated index
@@ -31,6 +32,8 @@ This repo is **multi-context**: several business domains share one FastApiAdmin 
     ├── module_internal/               ← 内务 territory
     └── infra/                         ← shared third-party layer, belongs to no domain
 ```
+
+**A new domain ships with its own glossary.** Adding a domain means `docs/<domain>/CONTEXT.md` alongside the `module_<domain>` code pair, registered in `domains.json`, and the hand-drawn tree above gains a line in the same commit. The rule itself — 一个新业务域 = 一个 `docs/<域>/` + 一份术语表 + 一对 `module_<域>` 目录，三样同词 — lives in `docs/agents/shared-rules.md` §3.1; this file only points at it so the two cannot drift.
 
 Two invariants:
 

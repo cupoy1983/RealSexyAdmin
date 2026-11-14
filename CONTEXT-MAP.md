@@ -8,6 +8,6 @@
 |---|---|---|---|
 | ecommerce | 电商 | docs/ecommerce/CONTEXT.md | backend/app/plugin/module_ecommerce backend/tests/live/ecommerce frontend/web/src/views/module_ecommerce frontend/web/src/api/module_ecommerce |
 | internal | 内务 | docs/internal/CONTEXT.md | backend/app/plugin/module_internal backend/tests/module_internal frontend/web/src/views/module_internal frontend/web/src/api/module_internal |
-| system | 全局 | （未建） | （不设领土） |
+| system | 全局 | docs/system/CONTEXT.md | （不设领土） |
 
 新建 ADR：`node scripts/adr.mjs new <标题>`（下一个号是 0043）。**不要手填编号，也不要在号前加域名。**
