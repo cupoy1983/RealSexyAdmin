@@ -22,6 +22,7 @@ This repo is **multi-context**: several business domains share one FastApiAdmin 
 │   ├── ecommerce/                     ← 电商: CONTEXT.md (glossary) + design docs and audits
 │   ├── internal/                      ← 内务: CONTEXT.md (glossary) + design docs and audits
 │   ├── system/                        ← 全局: CONTEXT.md (cross-domain vocabulary, no code territory)
+│   ├── agents/                        ← agent 共用的干活规矩：shared-rules.md / issue-tracker.md / triage-labels.md / pii-inventory.md（本文件就住在这）
 │   └── adr/
 │       ├── domains.json               ← the only hand-maintained file here: domain list, labels, glossary + code paths
 │       ├── README.md                  ← generated index
