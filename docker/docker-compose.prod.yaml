@@ -36,6 +36,11 @@ services:
       # 这里不要再写空值，否则会覆盖 .env.prod 中的配置。
       # 前端经 OpenResty 单层反代，保留代理跳数以便取到真实客户端 IP
       TRUSTED_PROXY_HOPS: "1"
+      # uvicorn 默认只信任 127.0.0.1 转发的 X-Forwarded-Proto，但 frpc 连进来经 docker
+      # 端口映射后，容器看到的对端是网关 IP 而非 127.0.0.1，于是 scheme 恒为 http，
+      # 上传接口返回的文件 URL 也就一直存成 http://。8001 只绑回环、只有本机 frpc 会连，
+      # 所以放开到全部不会多出一个可伪造头的入口。
+      FORWARDED_ALLOW_IPS: "*"
     ports:
       # 只绑定宿主机回环，公网必须经 OpenResty 的 HTTPS 访问
       - "127.0.0.1:${ADMIN_BACKEND_PORT:-8001}:8001"
