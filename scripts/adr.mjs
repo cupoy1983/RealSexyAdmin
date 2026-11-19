@@ -4,14 +4,14 @@
  *
  * adr.mjs —— ADR 编号的唯一发放者与校验者。人不手填编号，就不可能撞号。
  *
- *   node scripts/adr.mjs new <标题>        发一条新 ADR（永远取全仓最大号 +1），打印可粘贴的引用写法
+ *   node scripts/adr.mjs new <标题>        发一条新 ADR（取全仓最大号 +1），打印可粘贴的引用写法；块里还有未填占位时它拒绝发号——号段内改壳，不另开号
  *   node scripts/adr.mjs reserve <尾号>    把当前号占到自己报的尾号，一次建满空壳（状态：占位）；填内容直接改那份空壳，不走 new
  *   node scripts/adr.mjs check             校验：号不重不断、引用能解析到真实文件、引用没带域名、占位不许被引用、相对链接不指空
  *   node scripts/adr.mjs index             重新生成 docs/adr/README.md（索引）与 CONTEXT-MAP.md（语境地图）
  *   node scripts/adr.mjs renumber <文件>   给刚新建、还没被任何地方引用的 ADR 重发一个号（并行开发撞号时用）
  *
  * 2026-11-19 占位批次（业务方定，`ADR-0042`）：防撞靠的是**两块尾号由业务方错开报**（如「电商占到 45，内务从 46 起」），
- * 工具一次把整块建满空壳，`new` 便只会落在块外。`new`／`reserve` 都不联网、读不到别人的块，所以两个人各占同号照样撞，
+ * 工具一次把整块建满空壳，`new` 在这些壳填完之前直接拒绝发号（号段内改壳，不另开号）。`new`／`reserve` 都不联网、读不到别人的块，所以两个人各占同号照样撞，
  * 撞了由 `check` 的「重号即红」当场兜住。`check` 的「号段不许有洞」管的是一个块之内不许留空号（防手填、防重排漏改），
  * 它不是防撞机制，别把它当成跨检出的保障。
  *
@@ -148,6 +148,8 @@ function collectRangeTails() {
 function cmdNew(...titleParts) {
   const title = titleParts.join(" ").trim();
   if (!title) fail("用法：node scripts/adr.mjs new <标题>（标题一句话；号由工具取，不要自己写）");
+  const ph = unfilledPlaceholders();
+  if (ph.length) fail(`号段内不 new：本块还有 ${ph.length} 份未填占位（${ph.map((r) => `ADR-${r.num}`).join("、")}）——写决议就直接改那一份空壳的标题、状态与正文（号不动），不要另开一个号。要开新块先向业务方要块尾，再跑 node scripts/adr.mjs reserve <尾号>。`);
   const num = nextNumber();
   const slug = title.replaceAll(/[\\/:*?"<>|]/g, "").replaceAll(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
   mkdirSync(ADR_DIR, { recursive: true });
@@ -157,8 +159,7 @@ function cmdNew(...titleParts) {
   writeFileSync(file, `# ${title}\n\n> 状态：提议（${today}）\n\n`, "utf8");
   console.log(`已建：${rel(file)}`);
   console.log(`引用写法（全仓任何位置都一样，号前不加域名）：ADR-${num}`);
-  const ph = unfilledPlaceholders();
-  if (ph.length) console.log(`提醒：块内还有未填占位 ${ph.map((r) => `ADR-${r.num}`).join("、")}——这份新号落在块外，要写占位就直接改那几份文件，别再来 new。`);
+  console.log("规矩：号段按块分配（ADR-0042）——本块填完就没号了，先向业务方要新块尾再跑 reserve。");
   cmdIndex();
 }
 
@@ -166,7 +167,7 @@ function cmdNew(...titleParts) {
  *  一块之内不会留洞：start 到 end 每个号都真建出文件，所以 `check` 第 1 条（号段不许有洞）照旧绿；
  *  洞只可能来自手填或改名改坏，那正是那条闸要拦的事，跟占位批次无关。
  *  尾号对齐 0/5 由人当场报，工具不猜——「我占到 45，你从 46 起」这句话必须是可见的，不能靠各自算 max+1 撞运气。
- *  填占位不走 `new`（`new` 永远只发 max+1，这条语义一字不改）：直接改那一份空壳的标题、状态、正文，
+ *  填占位不走 `new`（块里还有未填占位时 `new` 直接拒绝发号；取号规则本身仍是 max+1）：直接改那一份空壳的标题、状态、正文，
  *  号不动；文件名里的「占位」换成一句话 slug 是可选的整理，只影响文件名，不影响索引（索引取正文标题）。 */
 function cmdReserve(...args) {
   const upper = args[0];
