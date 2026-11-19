@@ -143,8 +143,9 @@ scp -r dist/. root@<外网 OpenResty 主机>:/srv/RealSexyAdmin/
 
 ## ADR：一条全局序列，号由工具发
 
-- **号全仓唯一，平铺在 `docs/adr/`**：`0001–0018` 内务、`0019–0039` 电商（旧电商号各加 18），**`0040` 起是跨域／仓库级**（迁移链口径、上游同步、多 agent 共用规则）。**序列到几号以生成物 `docs/adr/README.md` 为准，这份文件不抄当前最大值**——抄了就是每加一条 ADR 过期一次。没有分域目录，也没有 `reserve_upto`。
+- **号全仓唯一，平铺在 `docs/adr/`**：`0001–0018` 内务、`0019–0039` 电商（旧电商号各加 18），**`0040` 起是跨域／仓库级**（迁移链口径、上游同步、多 agent 共用规则）。**序列到几号以生成物 `docs/adr/README.md` 为准，这份文件不抄当前最大值**——抄了就是每加一条 ADR 过期一次。没有分域目录，`domains.json` 里也没有 `reserve_upto`（那个字段 2026-11-12 删了）；下面那条 `adr.mjs reserve` 是**子命令**，跟它无关。
 - **永远不要手敲 ADR 号**：`node scripts/adr.mjs new <标题一句话>` 建文件并打印可粘贴的引用。`renumber` 只用于刚建、还没被任何地方引用过的条目。
+- **要号是"要一批"，不是"要一个"（`ADR-0042` 的 2026-11-19 修订节）**：`new` 与 `reserve` 都只扫本地 `docs/adr/`、不联网，两个检出各自发号必撞同一个号。所以**发号前先向业务方要一个块尾**（他报对齐到 0 或 5 的号），再用 `node scripts/adr.mjs reserve <尾号>` 一次建满整块空壳（`NNNN-占位.md`，状态：占位），下一块从块尾 +1 起。填占位是**直接改那一份文件**（标题、状态、正文，号不动），**不走 `new`**——`new` 永远只发 max+1，这条语义不变。引用还指着没填的占位时 `check` 判红；**CI 不发号**（workflow 是 `contents: read`），跨检出真撞了靠 `check` 的「重号即红」事后兜。
 - **引用只有一种形式 `ADR-<NNNN>`**，号前不加域名（`电商ADR-…` 这种旧写法 `check` 直接报错）。要说属于哪个域用正文说。
 - `docs/adr/domains.json` 是唯一手维护的文件，现在只是**模块登记表**（域名 → 代码目录 → 术语表），与编号无关。
 - `docs/adr/README.md` 与 `CONTEXT-MAP.md` 是生成物，手改视为违规，重跑 `index`。
@@ -155,7 +156,7 @@ scp -r dist/. root@<外网 OpenResty 主机>:/srv/RealSexyAdmin/
 **改完 `docs/`、`CONTEXT*.md`、ADR 引用或任何文本文件，立刻跑这三条**（CI 也跑它们）：
 
 ```bash
-node scripts/adr.mjs check        # 号段 / 引用可解析 / 引用不带域名 / 测试目录已登记 / 相对链接指空
+node scripts/adr.mjs check        # 号段 / 引用可解析 / 引用不带域名 / 占位不许被引用 / 测试目录已登记 / 相对链接指空
 node scripts/adr.mjs index        # 重写 CONTEXT-MAP.md 与 docs/adr/README.md（生成物，手改视为违规）
 git diff --exit-code docs/adr/README.md CONTEXT-MAP.md   # 抓生成物被手改
 ```

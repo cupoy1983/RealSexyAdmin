@@ -4,10 +4,16 @@
  *
  * adr.mjs —— ADR 编号的唯一发放者与校验者。人不手填编号，就不可能撞号。
  *
- *   node scripts/adr.mjs new <标题>        发一条新 ADR（取全仓下一个号），打印可粘贴的引用写法
- *   node scripts/adr.mjs check             校验：号不重不断、引用能解析到真实文件、引用没带域名、相对链接不指空
+ *   node scripts/adr.mjs new <标题>        发一条新 ADR（永远取全仓最大号 +1），打印可粘贴的引用写法
+ *   node scripts/adr.mjs reserve <尾号>    把当前号占到自己报的尾号，一次建满空壳（状态：占位）；填内容直接改那份空壳，不走 new
+ *   node scripts/adr.mjs check             校验：号不重不断、引用能解析到真实文件、引用没带域名、占位不许被引用、相对链接不指空
  *   node scripts/adr.mjs index             重新生成 docs/adr/README.md（索引）与 CONTEXT-MAP.md（语境地图）
  *   node scripts/adr.mjs renumber <文件>   给刚新建、还没被任何地方引用的 ADR 重发一个号（并行开发撞号时用）
+ *
+ * 2026-11-19 占位批次（业务方定，`ADR-0042`）：防撞靠的是**两块尾号由业务方错开报**（如「电商占到 45，内务从 46 起」），
+ * 工具一次把整块建满空壳，`new` 便只会落在块外。`new`／`reserve` 都不联网、读不到别人的块，所以两个人各占同号照样撞，
+ * 撞了由 `check` 的「重号即红」当场兜住。`check` 的「号段不许有洞」管的是一个块之内不许留空号（防手填、防重排漏改），
+ * 它不是防撞机制，别把它当成跨检出的保障。
  *
  * 2026-11-12 统一化（业务方 2026-11-09 拍板，shared-rules §六.3）：
  *   ADR 一律平铺在 docs/adr/，号全仓一条连续序列，引用只有一种写法 `ADR-<NNNN>`。
@@ -98,6 +104,10 @@ function nextNumber(excludePath = null) {
   return pad((nums.length ? Math.max(...nums) : 0) + 1);
 }
 
+/** 占位 = 状态写成「占位（日期）」的那份 ADR：号已占住，内容还没写（`ADR-0042`）。 */
+const isPlaceholder = (r) => /^占位/.test(r.status);
+const unfilledPlaceholders = () => listAdr().filter(isPlaceholder);
+
 /** 引用只有一种合法形状 `ADR-<NNNN>`。域名清单仍从 domains.json 取，
  *  这样以后新登记一个业务域，它自动进「不许写在号前面」的名单。 */
 function labelPattern() {
@@ -147,6 +157,41 @@ function cmdNew(...titleParts) {
   writeFileSync(file, `# ${title}\n\n> 状态：提议（${today}）\n\n`, "utf8");
   console.log(`已建：${rel(file)}`);
   console.log(`引用写法（全仓任何位置都一样，号前不加域名）：ADR-${num}`);
+  const ph = unfilledPlaceholders();
+  if (ph.length) console.log(`提醒：块内还有未填占位 ${ph.map((r) => `ADR-${r.num}`).join("、")}——这份新号落在块外，要写占位就直接改那几份文件，别再来 new。`);
+  cmdIndex();
+}
+
+/** 占一批号：从下一个号一路建到 <尾号>，每一份都是「状态：占位」的空壳。
+ *  一块之内不会留洞：start 到 end 每个号都真建出文件，所以 `check` 第 1 条（号段不许有洞）照旧绿；
+ *  洞只可能来自手填或改名改坏，那正是那条闸要拦的事，跟占位批次无关。
+ *  尾号对齐 0/5 由人当场报，工具不猜——「我占到 45，你从 46 起」这句话必须是可见的，不能靠各自算 max+1 撞运气。
+ *  填占位不走 `new`（`new` 永远只发 max+1，这条语义一字不改）：直接改那一份空壳的标题、状态、正文，
+ *  号不动；文件名里的「占位」换成一句话 slug 是可选的整理，只影响文件名，不影响索引（索引取正文标题）。 */
+function cmdReserve(...args) {
+  const upper = args[0];
+  if (!upper) fail("用法：node scripts/adr.mjs reserve <尾号>（尾号是这一批占到的最大号，对齐到 0 或 5）");
+  if (!/^\d{1,4}$/.test(upper)) fail(`尾号必须是 1-4 位数字：${upper}`);
+  const rows = listAdr();
+  const max = rows.length ? Math.max(...rows.map((r) => Number(r.num))) : 0;
+  const start = max + 1;
+  const end = Number(upper);
+  if (end < start) fail(`尾号 ${pad(end)} 比当前最大号 ${pad(max)} 还小或相等，没有可占的号`);
+  const today = new Date().toISOString().slice(0, 10);
+  mkdirSync(ADR_DIR, { recursive: true });
+  for (let n = start; n <= end; n++) {
+    const name = `${pad(n)}-占位.md`;
+    if (existsSync(join(ADR_DIR, name))) {
+      console.log(`已存在，跳过：docs/adr/${name}`);
+      continue;
+    }
+    writeFileSync(join(ADR_DIR, name), `# ADR-${pad(n)}：占位（内容待写）\n\n> 状态：占位（${today}）\n\n`, "utf8");
+    console.log(`已占位：docs/adr/${name}`);
+  }
+  console.log(`本块号段：${pad(start)}–${pad(end)}（下一块从 ${pad(end + 1)} 起）`);
+  if (end % 10 !== 0 && end % 10 !== 5) console.log(`提醒：尾号 ${pad(end)} 没对齐到 0 或 5——批次尾号取整到 0／5 是业务方定的口径，好记也好控。`);
+  const left = unfilledPlaceholders();
+  if (left.length) console.log(`未填占位 ${left.length} 份：${left.map((r) => `ADR-${r.num}`).join("、")}——填的时候直接改那几份文件（号不动）；谁引用它们，check 就拦谁。`);
   cmdIndex();
 }
 
@@ -222,11 +267,19 @@ function cmdCheck() {
 
   // 2) 引用可解析：带前缀的号，以及区间里的裸尾号
   const citations = collectCitations();
+  const byNum = new Map(listAdr().map((r) => [r.num, r]));
   for (const c of citations) {
     if (!present.has(c.num)) errs.push(`${c.file}:${c.line} 引用了不存在的一条：ADR-${c.num}（docs/adr/ 里没有这个号）`);
   }
   for (const t of collectRangeTails()) {
     if (!present.has(t.num)) errs.push(`${t.file} 区间/并写里的裸尾号 ${t.num} 指不到真实文件 —— 这类写法重排号段时最容易漏改`);
+  }
+  // 2b) 引用不许指向还空着的占位（`ADR-0042` 的占位批次）：号占住了不等于决议存在，
+  //     引用一份空壳等于把一个还没定的口径当成已定。占位自己标题里那一句不算引用——
+  //     `# ADR-0043：占位（内容待写）` 这一行本来就写着它自己的号，拦它等于让每份空壳一出生就红。
+  for (const c of citations) {
+    const r = byNum.get(c.num);
+    if (r && r.path !== c.file && isPlaceholder(r)) errs.push(`${c.file}:${c.line} 引用了还空着的占位 ADR-${c.num}（docs/adr/${r.name} 状态：${r.status}）—— 先把那份填了再引用，或改写成「待 ADR-${c.num} 落定」`);
   }
 
   // 3) 引用不许带域名：不拦的话，「号只在域内唯一」这套会被新写的句子悄悄退回来
@@ -311,7 +364,9 @@ function writeContextMap(doms, rows) {
     const code = (dom.code_dirs || []).length === 0 ? "（不设领土）" : (dom.code_dirs || []).filter((c) => existsSync(join(ROOT, c))).join(" ") || "（还没进本仓库）";
     out.push(`| ${key} | ${dom.label || "—"} | ${ctx} | ${code} |`);
   }
-  out.push("", `新建 ADR：\`node scripts/adr.mjs new <标题>\`（下一个号是 ${pad(Number(last) + 1)}）。**不要手填编号，也不要在号前加域名。**`, "");
+  const ph = unfilledPlaceholders();
+  const phNote = ph.length ? `；未填占位 ${ph.map((r) => `ADR-${r.num}`).join("、")}` : "";
+  out.push("", `新建 ADR：\`node scripts/adr.mjs new <标题>\`（下一个号是 ${pad(Number(last) + 1)}${phNote}）。**不要手填编号，也不要在号前加域名。**`, "");
   writeFileSync(CONTEXT_MAP_PATH, out.join("\n"), "utf8");
   console.log(`已生成 ${rel(CONTEXT_MAP_PATH)}`);
 }
@@ -323,7 +378,8 @@ function fail(msg) {
 
 const [cmd, ...args] = process.argv.slice(2);
 if (cmd === "new") cmdNew(...args);
+else if (cmd === "reserve") cmdReserve(...args);
 else if (cmd === "check") cmdCheck();
 else if (cmd === "index") cmdIndex();
 else if (cmd === "renumber") cmdRenumber(args[0]);
-else fail("用法：node scripts/adr.mjs new|check|index|renumber [参数]");
+else fail("用法：node scripts/adr.mjs new|reserve|check|index|renumber [参数]");
