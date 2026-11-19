@@ -11,7 +11,7 @@
  * 已在 2026-11-12 降到 0 条并删除，本文件不再有任何登记／放宽的入口。
  *
  *   node scripts/pii.mjs                # 校验，有命中就 exit 1
- *   node scripts/pii.mjs --selftest     # 验闸自己：正向 6 条必须响、反向 6 条不许响
+ *   node scripts/pii.mjs --selftest     # 验闸自己：正向 5 条必须响、反向 6 条不许响
  */
 
 import { spawnSync } from "node:child_process";
@@ -65,13 +65,6 @@ const RULES = [
     why: "姓名列被写成 2-4 个汉字（SQL 谓词或行文），定位请改用主键（oa_user_id / id）",
     re: /(?:user_name|external_name|real_name)\s*[=:]\s*['"`]([\u4e00-\u9fa5]{2,4})['"`]|(?:姓名|真名|用户名)\s*[=:：]\s*['"`]?([\u4e00-\u9fa5]{2,4})['"`]?/g,
     skip: (m, g1) => FIXTURE.name.test(g1),
-  },
-  {
-    id: "NAME_RATIO",
-    why: "「人名 + 出勤/金额比值」句式，等于把数字绑到具体人身上",
-    re: /(?<=[、：:(（])\s*([\u4e00-\u9fa5]{2,3})\s+\d{1,2}\/\d{1,2}(?![\d/])/g,
-    skip: (m, g1) => FIXTURE.name.test(g1),
-    group: 1,
   },
   {
     id: "LOCAL_PATH",
@@ -148,7 +141,6 @@ const SELFTEST = [
   ["订单 6000123456789012，实测从第4490行起", "LONG_ID"],
   ["钉钉 `012345678901234567`", "LONG_ID"],
   ["WHERE user_name = '张三丰'", "NAME_PREDICATE"],
-  ["同考勤组四人：沈某 23/17、", "NAME_RATIO"],
   ['NEW_FILE = r"C:\\Users\\tester\\Desktop\\12345.xlsx"', "LOCAL_PATH"],
   ['"@dcloudio/uni-app": "3.0.0-4080520251106001",', null],
   ["- ../backend/static/upload:/home/static/upload", null],

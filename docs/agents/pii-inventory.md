@@ -24,14 +24,14 @@
 
 | # | 数据 | 真值来源（实测列） | 级别 | 允许的写法 | 闸能否自动抓 |
 |---|---|---|---|---|---|
-| 1 | 员工／用户姓名 | `sys_user.name`（真实姓名）＋ `sys_user.username`（登录账号，常是拼音真名）、`iac_account_binding.external_name`、`iac_attendance_monthly_report.name`（姓名快照）、`iac_salary_payslip.user_name`（姓名快照） | **必脱** | 主键定位：`sys_user.id=10`（绑定表里叫 `oa_user_id`）；要区分多人用员工甲／乙／丙 | **抓不到行文里的名字**。只有写成 `user_name='张三'` 或「某人 23/17」这两种形状才响（NAME_PREDICATE／NAME_RATIO） |
+| 1 | 员工／用户姓名 | `sys_user.name`（真实姓名）＋ `sys_user.username`（登录账号，常是拼音真名）、`iac_account_binding.external_name`、`iac_attendance_monthly_report.name`（姓名快照）、`iac_salary_payslip.user_name`（姓名快照） | **必脱** | 主键定位：`sys_user.id=10`（绑定表里叫 `oa_user_id`）；要区分多人用员工甲／乙／丙 | **抓不到行文里的名字**。只有写成 `user_name='张三'` 这一种形状才响（NAME_PREDICATE）；「某人 23/17」那种句式曾由 NAME_RATIO 抓，**2026-11-19 该规则已删除**（`ADR-0042` 修订） |
 | 2 | 手机号 | `sys_user.mobile`、`iac_account_binding.mobile` | **必脱** | 不写；要证明"有这个字段"就 `136****5678` 或只写末两位 | ✓ MOBILE（`1[3-9]xxxxxxxxx`） |
 | 3 | 钉钉 userid / unionid（**工号已于 2026-11-12 AU11 续整类退出，见 §九**） | `iac_account_binding.external_user_id`、`group_id`；`job_number` 与 `iac_attendance_*.job_number` 已退出 | **userid 必脱**；**`iac_account_dept_mapping.dingtalk_dept_id`（钉钉部门 id）2026-11-11 AU8 判为不脱**（原话「钉钉部门 id 也不脱了吧，这个 id 别人也没用吧」）；工号同 AU11 续（原话「工号不敏感没事」） | 主键或"见本机运维记录"；**部门 id 以后新写尽量不要出现**（他的写作偏好，不是闸强制） | △ 半盲。LONG_ID 只认 **16–18 位纯数字**，而 §九 实测生产那 7 个 userid 是 **14／17／18／20 四种宽度**（7 个里漏 4 个）；字母数字混合的 userid 也抓不到。**缺口 2026-11-12 当场判「不加规则、完全匹配就好」，保留不修**。撤部门 id 的实测代价是 **0**：它一条整行规则都没进过，重跑演练的 tip 与撤之前一字不差（`14f33023`） |
 | 4 | 身份证号 | （库里没这列，但交付 SQL／导出 Excel 里可能有） | **必脱** | 一律不进仓库 | △ 18 位含末位 X 的形状可能不响 |
 | 5 | 邮箱／头像 URL | `sys_user.email`、`sys_user.avatar` | 邮箱**必脱**（AT11）／头像**不脱**（AT11「无所谓」） | 邮箱写 `x@…` 占位或不写；头像 URL 可原样留 | 邮箱：现在**没有规则**，但可以加（`EMAIL` 形状实测 19 处命中、4 个文件，且全是占位或上游示例：`backend/sql/sys_user.json`、`frontend/app/src/uni_modules/mp-html/README.md`、`frontend/web/package.json`、`frontend/web/src/views/fastlink/fachat/index.vue`——加之前要先立反向探针）。**AU10 没有改这一格**：他拍的是「邮箱这一类不得写入代码与文档」这条**写作禁令**（已进 §3.4 类别清单），不是给闸加 `EMAIL` 形状规则——加形状规则仍要做反向探针，仍是留白。头像：✗ |
 | 6 | 登录 IP / 主机地址 | `sys_login_log.login_ip`＋`login_location`（IP 解析出的地理串）、`sys_operation_log.request_ip`、`task_storage_node.host` | 公网 IP**必脱**（AT11）；私有／回环地址**不脱**（AT11 只说了公网 IP，这条是我的字面读法，**未拍**）；`login_location` 这种城市级地理串 **2026-11-11 AU8 判为不脱**（原话「城市串不用脱敏，……这些都无所谓的」），所以清单里也不取它 | `<本机运维记录>` | ✗ **裸 IPv4 形状规则不能用**：实测 43 处命中里 18 处是私有／回环，剩下的主力是版本号 `2.1.0.2`、`2.4.2.6-9` 和公共 DNS `8.8.8.8`。按 §3.4 末段，误报一次这个闸就废了——真要做必须"公网段＋上下文"再配反向探针 |
 | 7 | 考勤组名／部门名／公司名 | `iac_account_binding.group_name`、`iac_account_binding.dingtalk_dept_name`、`iac_account_dept_mapping.dingtalk_dept_name`、`sys_dept.name` | **整类不脱**（AT10 当天全面撤销：部门名／公司名是他拍的「部门名就不脱敏了…公司名也不脱了吧」，考勤组名是他补的「考勤组名 也不脱」） | 四类都**可原样写**，不再换"组甲" | ✗ 无形状；已从字典按类别剔除，闸与规则都不再管它 |
-| 8 | 真实工资／实发金额 | `iac_salary_profile.base_salary`、`iac_salary_payslip.{base_salary,prorated_base,net_amount}` | **不脱**（AT9「金额无所谓」，文档示例不必换假数） | 真实金额可留 | △ 只在"人名+比值"句式里响（NAME_RATIO）。注意：**「可识别字段不与真实金额同段」那条是姓名的规矩，AT9 没有重开它**，维持原样 |
+| 8 | 真实工资／实发金额 | `iac_salary_profile.base_salary`、`iac_salary_payslip.{base_salary,prorated_base,net_amount}` | **不脱**（AT9「金额无所谓」，文档示例不必换假数） | 真实金额可留 | ✗ 不响（原"人名+比值"句式规则 `NAME_RATIO` 于 2026-11-19 删除，`ADR-0042` 修订）。注意：**「可识别字段不与真实金额同段」那条是姓名的规矩，AT9 没有重开它**，维持原样 |
 | 9 | 平台订单号／系统单号／运单号／售后单号 | `ecommerce_order.system_order_no`、`ecommerce_order_detail.{platform_order_no,source_detail_id,tracking_no,after_sales_no}`、`ecommerce_courier_bill.waybill_no`、批次号 `order-2026-09` | **必脱**（单号能反查到收件人） | `6005…462465`（首4末6）或 `主键 id=NNN，完整号见本机` | ✓ LONG_ID（16–18 位）；`order-2026-09` 这种月粒度标识**不响，也不需要响** |
 | 10 | 店铺名／平台名 | `ecommerce_store.store_name`＋`kuaimai_shop_id`；平台列 `ecommerce_store.platform`／`ecommerce_order.platform` | 店名**必脱**；**平台名不脱**（2026-11-11 补充裁定「只脱店名 不脱平台」，电商平台名照写） | 店铺甲／店铺乙；平台名原样 | ✗ 无形状 |
 | 11 | 商品名／SKU 编码 | `ecommerce_order_detail.product_name`＋`sku_name`、`ecommerce_sku_cost.{product_name,sku_name}`；编码列 `sku_code`／`main_sku_code` | 品名**不写**，**直接以 SKU 编码展现**（AT8）；SKU 编码保留（它是算钱的键，也认不出人）。**存量 27 处不追溯**（2026-11-11 补充裁定），新写的用 `sku_code`（规格商家编码）或 `main_sku_code`（主商家编码） | 写该商品自己的 `main_sku_code`，不写品名 | ✗ |
@@ -179,7 +179,7 @@ git rev-list --count 5200f8bb..HEAD              # 重写受影响的后续提�
 git log --all --format="%h %ad %s" --date=short -S"某个真名"   # 某真值进过哪些提交
 git grep -c -E "(^|[^0-9])1[3-9][0-9]{9}([^0-9]|$)" HEAD -- docs/adr   # tip 上的手机号形状
 node scripts/pii.mjs                             # 工作树命中（2026-11-12 实测 1013 文件 / 0 处；豁免底账已删；只在提交／发布前跑，日常不跑）
-node scripts/pii.mjs --selftest                  # 闸自己（12 条探针）
+node scripts/pii.mjs --selftest                  # 闸自己（11 条探针）
 ```
 
 闸的规则原文在 `scripts/pii.mjs` 顶部 `RULES`。**业务方 2026-11-12（AU11）已正式判定不再给闸加新规则**（"不用规则了，你完全匹配就好了"），所以下面这句只在真要动规则时成立：改规则要连 `--selftest` 的反向探针一起改，理由见 §3.4 末段。核对某批真值在不在库里，用的是本机那份值清单做**完全匹配**，命令与 `Argument list too long` 那个坑见本文 §九。
@@ -372,7 +372,7 @@ git rev-list refs/heads/master \
 
 ### 闸对不上这六类：缺口实测（AU11 续当场判「不用规则，完全匹配就好」，本表只作记录，不再是待办）
 
-`scripts/pii.mjs` 现在 5 条规则全是形状闸，逐类一比：
+`scripts/pii.mjs` 现在 4 条规则全是形状闸（原第 5 条 `NAME_RATIO` 于 2026-11-19 删除，见 `ADR-0042` 修订），逐类一比：
 
 | 类别 | 现有规则 | 差在哪 |
 |---|---|---|
@@ -380,7 +380,7 @@ git rev-list refs/heads/master \
 | 钉钉 userid | `LONG_ID`（16–18 位） | **7 个真 id 里漏 4 个**（14 位 1 个、20 位 3 个）。若要改就按这四种实测宽度改、不拍数——**本次已否决，不改** |
 | 邮箱 | — | **无规则**，但 §3.4 写着邮箱要脱，闸抓不到。生产库实测**真邮箱 0 个**，只有三条出厂占位，所以这一类今天没有存量压力 |
 | 登录账号 | — | **无规则**；且它与公开仓库地址里的 owner 名同形，真要加必须同时带 URL 边界，否则 `AGENTS.md` 每提一次仓库地址就红一次——**本次已否决，不加** |
-| 真实姓名 | `NAME_PREDICATE` · `NAME_RATIO` | 只抓 `user_name='…'` 谓词和「人名 3/5」句式，**行文里的裸姓名抓不到**。真名清单又不能进仓库（闸自己会变成泄漏源）——要抓得让闸从本机读清单，这是一处新设计。**本次已否决** |
+| 真实姓名 | `NAME_PREDICATE` | 只抓 `user_name='…'` 谓词，**行文里的裸姓名与「人名 3/5」句式都抓不到**（句式那条 `NAME_RATIO` 于 2026-11-19 删除，见本节开头与 `ADR-0042` 修订）。真名清单又不能进仓库（闸自己会变成泄漏源）——要抓得让闸从本机读清单，这是一处新设计。**本次已否决** |
 | 工号 | — | **整类退出**（AU11 续：「工号不敏感没事」）。不再有规则、也不再占字典条目；以前按工号拦下来的存量不返工 |
 
 **这一节的结论不是待办**：他把控制点放在「agent 不写」这句写作规则上，核对手段是**拿本机那份值清单对全库完全匹配**（上面 §九 那条 `git grep -I -l -F -f` 命令，分批 + 正对照），而不是给闸加形状模式。以后**别再提补规则的建议**，也别在 `pii.mjs` 里动手——要动必须先有他的原话。
