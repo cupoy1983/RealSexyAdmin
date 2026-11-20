@@ -95,3 +95,7 @@ docker/redis/data/
 
 # 本机代理无法构建镜像而添加的源码挂载配置
 docker/docker-compose.override.yaml
+
+# ADR 的空壳一律不进库（业务方 2026-11-20 定）：号由业务方报，壳只住在本机。
+# 匹配的是路径——填成正式决议时要把文件名里的「占位」换成 slug，否则那份决议也照样被忽略。
+docs/adr/*-占位.md

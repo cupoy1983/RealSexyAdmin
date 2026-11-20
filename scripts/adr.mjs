@@ -4,16 +4,18 @@
  *
  * adr.mjs —— ADR 的校验者与索引生成器。**它不发号**：号由业务方配（2026-11-20 改判，`ADR-0042`）。
  *
- *   node scripts/adr.mjs check             校验：号不重、文件名与文内号一致、引用能解析到真实文件、引用没带域名、占位不许被引用、相对链接不指空；号段有洞只提醒不判红（占位允许不推）
- *   node scripts/adr.mjs index             重新生成 docs/adr/README.md（索引）与 CONTEXT-MAP.md（语境地图）
+ *   node scripts/adr.mjs check             校验：号不重、文件名与文内号一致、引用能解析到真实文件、引用没带域名、占位不许被引用、相对链接不指空；号段有洞只提醒不判红（空壳不进库）
+ *   node scripts/adr.mjs index             重新生成 docs/adr/README.md（索引）与 CONTEXT-MAP.md（语境地图）——只列已填好的决议，本地空壳不进这两份生成物
  *
  * 2026-11-20 改判（业务方定）：`new`、`reserve`、`renumber` 三条已删——号只从一只手出去才真不撞，
  * 而 `renumber` 自己算 `max+1`，那是仓库里最后一条自助定号的路。写一条决议的流程是：
- * 向业务方要号段（**起止都由他报**）→ 他建好 `NNNN-占位.md` 空壳 → agent **直接改那一份文件**的标题、状态、
- * 正文，号不动。占位允许不推（业务方 2026-11-20 定），所以对面看不见我这截空壳是预期行为，
+ * 向业务方要号段（**起止都由他报**）→ **agent 照这两个号建 `NNNN-占位.md` 空壳**（这一步叫建壳，不叫发号）
+ * → 之后**直接改那一份文件**的标题、状态、正文，号不动。空壳一律不推（业务方 2026-11-20 定，已写进 `.gitignore`
+ * 的 `docs/adr/*-占位.md`），填成正式决议才进库；所以对面看不见我这截空壳是预期行为，
  * `check` 的「号段有洞」从此**只提醒不判红**——代价是「46 敲成 47、漏建一份」不再有机器兜底，
- * 只剩重号、文件名与文内号不一致这两条还判红。号真写错了：按业务方报的那个号手工改
- * （`git mv` 文件名 + 改正文的 `# ADR-NNNN` 那行），再跑 `index`。
+ * 只剩重号、文件名与文内号不一致这两条还判红。号真写错了：按业务方报的那个号手工改——没填的壳不在版本控制里，
+ * 用普通 `mv` 改文件名（`git mv` 会报 `not under version control`），已进库的那份才用 `git mv`；
+ * 两种都要改正文的 `# ADR-NNNN` 那行，再跑 `index`。
  *
  * 2026-11-12 统一化（业务方 2026-11-09 拍板，shared-rules §六.3）：
  *   ADR 一律平铺在 docs/adr/，号全仓一条连续序列，引用只有一种写法 `ADR-<NNNN>`。
@@ -99,7 +101,6 @@ function listAdr() {
 
 /** 占位 = 状态写成「占位（日期）」的那份 ADR：号已占住，内容还没写（`ADR-0042`）。 */
 const isPlaceholder = (r) => /^占位/.test(r.status);
-const unfilledPlaceholders = () => listAdr().filter(isPlaceholder);
 
 /** 引用只有一种合法形状 `ADR-<NNNN>`。域名清单仍从 domains.json 取，
  *  这样以后新登记一个业务域，它自动进「不许写在号前面」的名单。 */
@@ -186,10 +187,11 @@ function cmdCheck() {
   const holes = [];
   for (let n = 1; n <= max; n++) if (!present.has(pad(n))) holes.push(n);
   if (holes.length) {
-    // 占位允许不推（业务方 2026-11-20 定），而"没推的空壳"和"号敲错了"在本地看不出区别，
-    // 所以这一条从判红降成提醒：它只负责让人看见，不再负责拦下对面那一次提交。
+    // 空壳一律不进库（业务方 2026-11-20 定，`.gitignore` 里的 `docs/adr/*-占位.md`），
+    // 所以一块没填完的号在对面与 CI 眼里就是洞；"还没填"和"号敲错了"在本地看不出区别，
+    // 这一条因此从判红降成提醒：只负责让人看见，不再负责拦下对面那一次提交。
     const ranges = asRanges(holes);
-    notices.push(`号段有洞：${ranges.slice(0, 8).join("、")}${holes.length > 8 ? `…共 ${holes.length} 个号` : ""} —— 占位可以不推，洞现在只提醒不判红；但这也是说「46 敲成 47、漏建一份」从此没有机器兜底，只剩重号、文件名与文内号不一致这两条还判红`);
+    notices.push(`号段有洞：${ranges.slice(0, 8).join("、")}${holes.length > 8 ? `…共 ${holes.length} 个号` : ""} —— 空壳不进库，没填的那几号本来就看不见，所以洞只提醒不判红；但这也是说「46 敲成 47、漏建一份」从此没有机器兜底，只剩重号、文件名与文内号不一致这两条还判红`);
   }
 
   // 2) 引用可解析：带前缀的号，以及区间里的裸尾号
@@ -252,11 +254,13 @@ function cmdCheck() {
 
 function cmdIndex() {
   const doms = registry();
-  const rows = listAdr();
+  // 未填的空壳不进生成物：壳按口径一律不推（`.gitignore`），CI 手上没有它们。
+  // 要是本地把它们写进 README，这份生成物一提交就和 CI 重新生成出来的对不上 → 假红灯。
+  const rows = listAdr().filter((r) => !isPlaceholder(r));
   const lines = [
     "# ADR 索引（由工具生成，别手改）",
     "",
-    "生成命令：`node scripts/adr.mjs index`。**号由业务方配**（`ADR-0042`）：要写决议先向他要号段，他建好 `NNNN-占位.md` 空壳推过来，你直接改那一份文件，不要手填编号。",
+    "生成命令：`node scripts/adr.mjs index`。**号由业务方报**（`ADR-0042`）：要写决议先向他要号段（起止都由他报），**你照那两个号建 `NNNN-占位.md` 空壳**，再直接改那一份文件，不要手填编号。空壳不进库（`.gitignore` 里的 `docs/adr/*-占位.md`），也不出现在本索引里——本表只列已填好的决议。",
     "",
     "**号全仓唯一，一条连续序列。** 2026-11-12 统一化后 ADR 全部平铺在本目录，引用在任何位置都只写 `ADR-<NNNN>`，号前不加域名。",
     "业务域仍登记在 `domains.json`，但它管的是术语表与代码领土在哪（见根目录 `CONTEXT-MAP.md`），不管编号。",
@@ -292,9 +296,7 @@ function writeContextMap(doms, rows) {
     const code = (dom.code_dirs || []).length === 0 ? "（不设领土）" : (dom.code_dirs || []).filter((c) => existsSync(join(ROOT, c))).join(" ") || "（还没进本仓库）";
     out.push(`| ${key} | ${dom.label || "—"} | ${ctx} | ${code} |`);
   }
-  const ph = unfilledPlaceholders();
-  const phNote = ph.length ? `；未填占位 ${ph.map((r) => `ADR-${r.num}`).join("、")}` : "";
-  out.push("", `当前最大号 ADR-${last}${phNote}。写决议**不走工具发号**：向业务方要号段（起止都由他报），他建好空壳推过来，你直接改那一份文件的标题、状态、正文，号不动。引用一律写 \`ADR-<NNNN>\`，号前不加域名。`, "");
+  out.push("", `当前最大号 ADR-${last}（只数已写定的决议，本地未填的空壳不进本文件）。写决议**不走工具发号**：向业务方要号段（起止都由他报），你照这两个号建 \`NNNN-占位.md\` 空壳、之后直接改那一份文件的标题、状态、正文，号不动。引用一律写 \`ADR-<NNNN>\`，号前不加域名。`, "");
   writeFileSync(CONTEXT_MAP_PATH, out.join("\n"), "utf8");
   console.log(`已生成 ${rel(CONTEXT_MAP_PATH)}`);
 }
@@ -305,7 +307,6 @@ function fail(msg) {
 }
 
 const [cmd] = process.argv.slice(2);
-if (cmd === "new" || cmd === "reserve" || cmd === "renumber") fail(`\`${cmd}\` 已在 2026-11-20 删掉：号由业务方配，agent 不自行发号，也不自己算 max+1（ADR-0042）。要写一条决议，直接改他建好的那份 docs/adr/NNNN-占位.md 空壳（标题、状态、正文，号不动）；手上没有空壳就先向业务方要号段。`);
-else if (cmd === "check") cmdCheck();
+if (cmd === "check") cmdCheck();
 else if (cmd === "index") cmdIndex();
-else fail("用法：node scripts/adr.mjs check|index（发号的 new／reserve／renumber 已删，号由业务方配）");
+else fail("用法：node scripts/adr.mjs check|index —— 它只校验、只生成索引，暂时没有其他命令。");
