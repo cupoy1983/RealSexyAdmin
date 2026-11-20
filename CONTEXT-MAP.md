@@ -10,4 +10,4 @@
 | internal | 内务 | docs/internal/CONTEXT.md | backend/app/plugin/module_internal backend/tests/module_internal frontend/web/src/views/module_internal frontend/web/src/api/module_internal |
 | system | 全局 | docs/system/CONTEXT.md | （不设领土） |
 
-新建 ADR：`node scripts/adr.mjs new <标题>`（下一个号是 0046；未填占位 ADR-0043、ADR-0044、ADR-0045）。**不要手填编号，也不要在号前加域名。**
+当前最大号 ADR-0045；未填占位 ADR-0043、ADR-0044、ADR-0045。写决议**不走工具发号**：向业务方要号段（起止都由他报），他建好空壳推过来，你直接改那一份文件的标题、状态、正文，号不动。引用一律写 `ADR-<NNNN>`，号前不加域名。

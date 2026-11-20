@@ -1,6 +1,6 @@
 # ADR 索引（由工具生成，别手改）
 
-生成命令：`node scripts/adr.mjs index`。新建 ADR 用 `node scripts/adr.mjs new <标题>`，不要手填编号。
+生成命令：`node scripts/adr.mjs index`。**号由业务方配**（`ADR-0042`）：要写决议先向他要号段，他建好 `NNNN-占位.md` 空壳推过来，你直接改那一份文件，不要手填编号。
 
 **号全仓唯一，一条连续序列。** 2026-11-12 统一化后 ADR 全部平铺在本目录，引用在任何位置都只写 `ADR-<NNNN>`，号前不加域名。
 业务域仍登记在 `domains.json`，但它管的是术语表与代码领土在哪（见根目录 `CONTEXT-MAP.md`），不管编号。

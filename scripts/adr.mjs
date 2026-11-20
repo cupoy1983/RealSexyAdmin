@@ -2,18 +2,18 @@
 /**
  * scripts/ —— 仓库根级的开发辅助工具，只放「不随业务模块删走」的脚本。
  *
- * adr.mjs —— ADR 编号的唯一发放者与校验者。人不手填编号，就不可能撞号。
+ * adr.mjs —— ADR 的校验者与索引生成器。**它不发号**：号由业务方配（2026-11-20 改判，`ADR-0042`）。
  *
- *   node scripts/adr.mjs new <标题>        发一条新 ADR（取全仓最大号 +1），打印可粘贴的引用写法；块里还有未填占位时它拒绝发号——号段内改壳，不另开号
- *   node scripts/adr.mjs reserve <尾号>    把当前号占到自己报的尾号，一次建满空壳（状态：占位）；填内容直接改那份空壳，不走 new
- *   node scripts/adr.mjs check             校验：号不重不断、引用能解析到真实文件、引用没带域名、占位不许被引用、相对链接不指空
+ *   node scripts/adr.mjs check             校验：号不重、文件名与文内号一致、引用能解析到真实文件、引用没带域名、占位不许被引用、相对链接不指空；号段有洞只提醒不判红（占位允许不推）
  *   node scripts/adr.mjs index             重新生成 docs/adr/README.md（索引）与 CONTEXT-MAP.md（语境地图）
- *   node scripts/adr.mjs renumber <文件>   给刚新建、还没被任何地方引用的 ADR 重发一个号（并行开发撞号时用）
  *
- * 2026-11-19 占位批次（业务方定，`ADR-0042`）：防撞靠的是**两块尾号由业务方错开报**（如「电商占到 45，内务从 46 起」），
- * 工具一次把整块建满空壳，`new` 在这些壳填完之前直接拒绝发号（号段内改壳，不另开号）。`new`／`reserve` 都不联网、读不到别人的块，所以两个人各占同号照样撞，
- * 撞了由 `check` 的「重号即红」当场兜住。`check` 的「号段不许有洞」管的是一个块之内不许留空号（防手填、防重排漏改），
- * 它不是防撞机制，别把它当成跨检出的保障。
+ * 2026-11-20 改判（业务方定）：`new`、`reserve`、`renumber` 三条已删——号只从一只手出去才真不撞，
+ * 而 `renumber` 自己算 `max+1`，那是仓库里最后一条自助定号的路。写一条决议的流程是：
+ * 向业务方要号段（**起止都由他报**）→ 他建好 `NNNN-占位.md` 空壳 → agent **直接改那一份文件**的标题、状态、
+ * 正文，号不动。占位允许不推（业务方 2026-11-20 定），所以对面看不见我这截空壳是预期行为，
+ * `check` 的「号段有洞」从此**只提醒不判红**——代价是「46 敲成 47、漏建一份」不再有机器兜底，
+ * 只剩重号、文件名与文内号不一致这两条还判红。号真写错了：按业务方报的那个号手工改
+ * （`git mv` 文件名 + 改正文的 `# ADR-NNNN` 那行），再跑 `index`。
  *
  * 2026-11-12 统一化（业务方 2026-11-09 拍板，shared-rules §六.3）：
  *   ADR 一律平铺在 docs/adr/，号全仓一条连续序列，引用只有一种写法 `ADR-<NNNN>`。
@@ -22,8 +22,8 @@
  *   不再参与发号，也不再参与引用判定。
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, renameSync, realpathSync } from "node:fs";
-import { join, dirname, relative, basename, extname } from "node:path";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, realpathSync } from "node:fs";
+import { join, dirname, relative, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -97,13 +97,6 @@ function listAdr() {
   return rows.sort((a, b) => a.num.localeCompare(b.num));
 }
 
-/** 下一个号 = 已用号的最大值 + 1。不用「第一个空号」，避免复用已废止决策留下的洞。
- *  excludePath 给 renumber 用：把正在改号的那条自己排除掉，这样号会往回收而不是继续往外跑。 */
-function nextNumber(excludePath = null) {
-  const nums = listAdr().filter((r) => r.path !== excludePath).map((r) => Number(r.num));
-  return pad((nums.length ? Math.max(...nums) : 0) + 1);
-}
-
 /** 占位 = 状态写成「占位（日期）」的那份 ADR：号已占住，内容还没写（`ADR-0042`）。 */
 const isPlaceholder = (r) => /^占位/.test(r.status);
 const unfilledPlaceholders = () => listAdr().filter(isPlaceholder);
@@ -145,76 +138,6 @@ function collectRangeTails() {
   return hits;
 }
 
-function cmdNew(...titleParts) {
-  const title = titleParts.join(" ").trim();
-  if (!title) fail("用法：node scripts/adr.mjs new <标题>（标题一句话；号由工具取，不要自己写）");
-  const ph = unfilledPlaceholders();
-  if (ph.length) fail(`号段内不 new：本块还有 ${ph.length} 份未填占位（${ph.map((r) => `ADR-${r.num}`).join("、")}）——写决议就直接改那一份空壳的标题、状态与正文（号不动），不要另开一个号。要开新块先向业务方要块尾，再跑 node scripts/adr.mjs reserve <尾号>。`);
-  const num = nextNumber();
-  const slug = title.replaceAll(/[\\/:*?"<>|]/g, "").replaceAll(/\s+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-  mkdirSync(ADR_DIR, { recursive: true });
-  const file = join(ADR_DIR, `${num}-${slug}.md`);
-  if (existsSync(file)) fail(`文件已存在：${rel(file)}`);
-  const today = new Date().toISOString().slice(0, 10);
-  writeFileSync(file, `# ${title}\n\n> 状态：提议（${today}）\n\n`, "utf8");
-  console.log(`已建：${rel(file)}`);
-  console.log(`引用写法（全仓任何位置都一样，号前不加域名）：ADR-${num}`);
-  console.log("规矩：号段按块分配（ADR-0042）——本块填完就没号了，先向业务方要新块尾再跑 reserve。");
-  cmdIndex();
-}
-
-/** 占一批号：从下一个号一路建到 <尾号>，每一份都是「状态：占位」的空壳。
- *  一块之内不会留洞：start 到 end 每个号都真建出文件，所以 `check` 第 1 条（号段不许有洞）照旧绿；
- *  洞只可能来自手填或改名改坏，那正是那条闸要拦的事，跟占位批次无关。
- *  尾号对齐 0/5 由人当场报，工具不猜——「我占到 45，你从 46 起」这句话必须是可见的，不能靠各自算 max+1 撞运气。
- *  填占位不走 `new`（块里还有未填占位时 `new` 直接拒绝发号；取号规则本身仍是 max+1）：直接改那一份空壳的标题、状态、正文，
- *  号不动；文件名里的「占位」换成一句话 slug 是可选的整理，只影响文件名，不影响索引（索引取正文标题）。 */
-function cmdReserve(...args) {
-  const upper = args[0];
-  if (!upper) fail("用法：node scripts/adr.mjs reserve <尾号>（尾号是这一批占到的最大号，对齐到 0 或 5）");
-  if (!/^\d{1,4}$/.test(upper)) fail(`尾号必须是 1-4 位数字：${upper}`);
-  const rows = listAdr();
-  const max = rows.length ? Math.max(...rows.map((r) => Number(r.num))) : 0;
-  const start = max + 1;
-  const end = Number(upper);
-  if (end < start) fail(`尾号 ${pad(end)} 比当前最大号 ${pad(max)} 还小或相等，没有可占的号`);
-  const today = new Date().toISOString().slice(0, 10);
-  mkdirSync(ADR_DIR, { recursive: true });
-  for (let n = start; n <= end; n++) {
-    const name = `${pad(n)}-占位.md`;
-    if (existsSync(join(ADR_DIR, name))) {
-      console.log(`已存在，跳过：docs/adr/${name}`);
-      continue;
-    }
-    writeFileSync(join(ADR_DIR, name), `# ADR-${pad(n)}：占位（内容待写）\n\n> 状态：占位（${today}）\n\n`, "utf8");
-    console.log(`已占位：docs/adr/${name}`);
-  }
-  console.log(`本块号段：${pad(start)}–${pad(end)}（下一块从 ${pad(end + 1)} 起）`);
-  if (end % 10 !== 0 && end % 10 !== 5) console.log(`提醒：尾号 ${pad(end)} 没对齐到 0 或 5——批次尾号取整到 0／5 是业务方定的口径，好记也好控。`);
-  const left = unfilledPlaceholders();
-  if (left.length) console.log(`未填占位 ${left.length} 份：${left.map((r) => `ADR-${r.num}`).join("、")}——填的时候直接改那几份文件（号不动）；谁引用它们，check 就拦谁。`);
-  cmdIndex();
-}
-
-function cmdRenumber(fileRelArg) {
-  if (!fileRelArg) fail("用法：node scripts/adr.mjs renumber <ADR 文件路径>");
-  const full = join(ROOT, fileRelArg);
-  if (!existsSync(full)) fail(`找不到文件：${fileRelArg}`);
-  const fileRel = rel(full);
-  if (dirname(fileRel) !== "docs/adr") fail(`ADR 一律平铺在 docs/adr/ 下，这个不在：${fileRel}`);
-  const m = basename(fileRel).match(/^(\d{4})-(.+)$/);
-  if (!m) fail("文件名不是 NNNN-标题.md 格式");
-  const num = nextNumber(fileRel);
-  const target = join(dirname(full), `${num}-${m[2]}`);
-  let text = read(full);
-  if (/^#\s*ADR-\d{4}/m.test(text)) text = text.replace(/^(#\s*ADR-)\d{4}/m, `$1${num}`);
-  renameSync(full, target);
-  writeFileSync(target, text, "utf8");
-  console.log(`重发号：${fileRel} → ${rel(target)}`);
-  console.log("注意：renumber 只用于刚新建、还没被任何文档或代码引用的 ADR。已有人引用的号不要动。");
-  cmdIndex();
-}
-
 /** 相对链接是否指得到真实文件：搬目录时靠这条命令兜底，不靠人眼 */
 function checkLinks() {
   const bad = [];
@@ -249,6 +172,7 @@ function asRanges(nums) {
 
 function cmdCheck() {
   const errs = [];
+  const notices = [];
   const rows = listAdr();
 
   // 1) 号段：不重、不断、文件名与文件内的号一致
@@ -262,8 +186,10 @@ function cmdCheck() {
   const holes = [];
   for (let n = 1; n <= max; n++) if (!present.has(pad(n))) holes.push(n);
   if (holes.length) {
+    // 占位允许不推（业务方 2026-11-20 定），而"没推的空壳"和"号敲错了"在本地看不出区别，
+    // 所以这一条从判红降成提醒：它只负责让人看见，不再负责拦下对面那一次提交。
     const ranges = asRanges(holes);
-    errs.push(`号段有洞：${ranges.slice(0, 8).join("、")}${ranges.length > 8 ? `…共 ${holes.length} 个号` : ""} —— 号由工具发放，不要手填；新 ADR 用 node scripts/adr.mjs new <标题>`);
+    notices.push(`号段有洞：${ranges.slice(0, 8).join("、")}${holes.length > 8 ? `…共 ${holes.length} 个号` : ""} —— 占位可以不推，洞现在只提醒不判红；但这也是说「46 敲成 47、漏建一份」从此没有机器兜底，只剩重号、文件名与文内号不一致这两条还判红`);
   }
 
   // 2) 引用可解析：带前缀的号，以及区间里的裸尾号
@@ -315,6 +241,7 @@ function cmdCheck() {
     for (const b of badLinks.slice(0, 30)) console.error("  - " + b);
     if (badLinks.length > 30) console.error(`  …另有 ${badLinks.length - 30} 处`);
   }
+  for (const n of notices) console.warn(`提醒：${n}`);
   if (failed) process.exit(1);
 
   const doms = registry();
@@ -329,7 +256,7 @@ function cmdIndex() {
   const lines = [
     "# ADR 索引（由工具生成，别手改）",
     "",
-    "生成命令：`node scripts/adr.mjs index`。新建 ADR 用 `node scripts/adr.mjs new <标题>`，不要手填编号。",
+    "生成命令：`node scripts/adr.mjs index`。**号由业务方配**（`ADR-0042`）：要写决议先向他要号段，他建好 `NNNN-占位.md` 空壳推过来，你直接改那一份文件，不要手填编号。",
     "",
     "**号全仓唯一，一条连续序列。** 2026-11-12 统一化后 ADR 全部平铺在本目录，引用在任何位置都只写 `ADR-<NNNN>`，号前不加域名。",
     "业务域仍登记在 `domains.json`，但它管的是术语表与代码领土在哪（见根目录 `CONTEXT-MAP.md`），不管编号。",
@@ -367,7 +294,7 @@ function writeContextMap(doms, rows) {
   }
   const ph = unfilledPlaceholders();
   const phNote = ph.length ? `；未填占位 ${ph.map((r) => `ADR-${r.num}`).join("、")}` : "";
-  out.push("", `新建 ADR：\`node scripts/adr.mjs new <标题>\`（下一个号是 ${pad(Number(last) + 1)}${phNote}）。**不要手填编号，也不要在号前加域名。**`, "");
+  out.push("", `当前最大号 ADR-${last}${phNote}。写决议**不走工具发号**：向业务方要号段（起止都由他报），他建好空壳推过来，你直接改那一份文件的标题、状态、正文，号不动。引用一律写 \`ADR-<NNNN>\`，号前不加域名。`, "");
   writeFileSync(CONTEXT_MAP_PATH, out.join("\n"), "utf8");
   console.log(`已生成 ${rel(CONTEXT_MAP_PATH)}`);
 }
@@ -377,10 +304,8 @@ function fail(msg) {
   process.exit(1);
 }
 
-const [cmd, ...args] = process.argv.slice(2);
-if (cmd === "new") cmdNew(...args);
-else if (cmd === "reserve") cmdReserve(...args);
+const [cmd] = process.argv.slice(2);
+if (cmd === "new" || cmd === "reserve" || cmd === "renumber") fail(`\`${cmd}\` 已在 2026-11-20 删掉：号由业务方配，agent 不自行发号，也不自己算 max+1（ADR-0042）。要写一条决议，直接改他建好的那份 docs/adr/NNNN-占位.md 空壳（标题、状态、正文，号不动）；手上没有空壳就先向业务方要号段。`);
 else if (cmd === "check") cmdCheck();
 else if (cmd === "index") cmdIndex();
-else if (cmd === "renumber") cmdRenumber(args[0]);
-else fail("用法：node scripts/adr.mjs new|reserve|check|index|renumber [参数]");
+else fail("用法：node scripts/adr.mjs check|index（发号的 new／reserve／renumber 已删，号由业务方配）");

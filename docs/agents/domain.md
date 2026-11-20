@@ -9,7 +9,7 @@ How the engineering skills should consume this repo's domain documentation when 
 - **`docs/adr/`** itself holds every decision of every domain, flat, in one continuous sequence. There is no per-domain ADR folder.
 - The glossary and the design docs **of the domain you are about to work in**: `docs/<domain>/CONTEXT.md`, the rest of `docs/<domain>/`, and `backend/app/plugin/module_<domain>/`.
 
-If a domain's glossary doesn't exist yet, **proceed silently**. Don't flag its absence; don't suggest creating it upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates it lazily when terms actually get resolved. To add an ADR, use `node scripts/adr.mjs new <title>` — it takes the next repo-wide number and creates `docs/adr/<NNNN>-<slug>.md`.
+If a domain's glossary doesn't exist yet, **proceed silently**. Don't flag its absence; don't suggest creating it upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates it lazily when terms actually get resolved. To add an ADR, **ask the business owner for a number range** — he reports both ends and creates the `docs/adr/<NNNN>-占位.md` shells (pushing them is his call, not a gate: unpushed shells stay invisible to other checkouts and `check` now only prints a reminder for the resulting gaps). You then edit that file in place (title, status, body; the number never moves). `adr.mjs new`, `reserve` and `renumber` were all deleted on 2026-11-20 (`ADR-0042`): a tool that computes `max+1` locally hands every checkout its own issuer, and two issuers collide — including when "fixing" a number someone else already reported.
 
 ## File structure
 
@@ -39,9 +39,9 @@ This repo is **multi-context**: several business domains share one FastApiAdmin 
 Two invariants:
 
 - **One number, repo-wide.** `ADR-0004` names exactly one decision no matter which folder you are standing in. Nothing is domain-qualified.
-- **The tool issues numbers; a human allocates blocks.** `node scripts/adr.mjs new <title>` takes the *local* maximum plus one — unique inside one checkout, blind across clones, since it never reads the sibling. So while any shell in your block is still unfilled, `new` refuses outright — exit 1, nothing written: you edit that shell instead (title, status, body; the number never moves). Ask the business owner for a block tail (aligned to 0 or 5), run `node scripts/adr.mjs reserve <tail>`, then produce every ADR in the block by filling a shell. Once the whole block holds real decisions the tool can no longer tell whether you have quota left — `new` will take `max+1` silently — so when the block runs out, stop and ask for the next tail. `check` fails on a gap, a duplicate, or a citation that points at a number no file carries. Full wording: `ADR-0042` 的 2026-11-19 修订节（第 9 条「块用尽即停」）。
+- **One issuer: the business owner.** `adr.mjs` stopped minting numbers on 2026-11-20 (`new` and `reserve` deleted, `ADR-0042`); it only validates them and rebuilds the index. He reports both ends of a range and commits the placeholder shells; agents fill those files in place. `check` fails on a gap, a duplicate, or a citation that points at a number no file carries — and with `new` gone the gap check is also the only machine catch for a mistyped number, so ranges stay contiguous: the next block starts at previous tail + 1.
 
-Because the sequence is repo-wide, the sibling clone `../RealSexy-OA` (same remote, same `master`) cannot keep issuing numbers alongside us. First-wins is **not** the rule: two checkouts that both start from the same commit take the same number, and nothing complains until `check` goes red on the duplicate afterwards. The control is a human allocating blocks — the business owner reports a tail aligned to 0 or 5, each checkout reserves its own block with `adr.mjs reserve`, and two blocks never overlap. Coordinate the rest by git: merge their commits, then continue. `reserve_upto` is gone (2026-11-12); it was a second ledger, whereas the placeholder shells are their own record.
+Because the sequence is repo-wide, the sibling clone `../RealSexy-OA` (same remote, same `master`) cannot keep issuing numbers alongside us — and since 2026-11-20 neither of them issues any: the business owner allocates both ends and commits the shells. Coordinate the rest by git: merge their commits, then continue. `reserve_upto` is gone; it only existed to keep two per-domain sequences from stepping on each other.
 
 **Territory is exactly what `domains.json` lists in `code_dirs` — nothing else.** Since 2026-11-10 that includes the test folders: `backend/tests/module_<domain>/` (A-class pytest) and `backend/tests/live/<domain>/` (B-class round scripts that need the local dev database). Territory now answers one question only — *whose glossary, whose design docs* — it has no bearing on how you cite an ADR. Layout rules: `docs/agents/shared-rules.md` §2.5 (T1–T8).
 
@@ -64,7 +64,7 @@ One form, everywhere: `ADR-<NNNN>` — in code comments, in docs, in issues, in 
 
 Say which domain a decision belongs to in prose when it helps the reader (`ADR-0022`, 商品成本的单一来源), never as part of the identifier. The domain names are still useful language — `domains.json` keeps each `label` for exactly that — they just aren't part of a citation.
 
-If you can't tell which domain a decision belongs to, the question is about code and glossary ownership, not about the citation: `node scripts/adr.mjs new <标题>` places it in the flat folder either way. Ask when the ownership matters.
+If you can't tell which domain a decision belongs to, the question is about code and glossary ownership, not about the citation: the number the business owner handed you sits in the flat folder either way. Ask when the ownership matters.
 
 ## Flag ADR conflicts
 
