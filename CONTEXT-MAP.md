@@ -6,7 +6,7 @@
 
 | 域 | 中文名 | 术语表 | 代码领土 |
 |---|---|---|---|
-| ecommerce | 电商 | docs/ecommerce/CONTEXT.md | backend/app/plugin/module_ecommerce backend/tests/live/ecommerce frontend/web/src/views/module_ecommerce frontend/web/src/api/module_ecommerce |
+| ecommerce | 电商 | docs/ecommerce/CONTEXT.md | backend/app/plugin/module_ecommerce backend/tests/module_ecommerce backend/tests/live/ecommerce frontend/web/src/views/module_ecommerce frontend/web/src/api/module_ecommerce |
 | internal | 内务 | docs/internal/CONTEXT.md | backend/app/plugin/module_internal backend/tests/module_internal frontend/web/src/views/module_internal frontend/web/src/api/module_internal |
 | system | 全局 | docs/system/CONTEXT.md | （不设领土） |
 
