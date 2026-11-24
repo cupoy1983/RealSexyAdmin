@@ -1,0 +1,88 @@
+# Crawlee + Playwright shared runtime lock, validated on 2026-11-25.
+# Derived from the validated isolated collector environment; Python 3.12.
+# Top-level dependency inputs: requirements.in in this directory.
+annotated-types==0.8.0
+    # via pydantic
+anyio==4.16.0
+    # via httpx
+apify-fingerprint-datapoints==0.16.0
+    # via
+    #   browserforge
+    #   crawlee
+async-timeout==5.0.1
+    # via crawlee
+browserforge==1.2.4
+    # via crawlee
+cachetools==8.0.2
+    # via crawlee
+certifi==2026.11.20
+    # via
+    #   httpcore
+    #   httpx
+click==8.5.1
+    # via browserforge
+colorama==0.4.6
+    # via crawlee
+crawlee==1.11.2
+    # via -r backend/app/plugin/infra/crawler/requirements.in
+greenlet==3.5.6
+    # via playwright
+h11==0.16.0
+    # via httpcore
+httpcore==1.0.9
+    # via httpx
+httpx==0.28.1
+    # via -r backend/app/plugin/infra/crawler/requirements.in
+idna==3.20
+    # via
+    #   anyio
+    #   httpx
+    #   yarl
+impit==0.15.3
+    # via crawlee
+more-itertools==11.2.1
+    # via crawlee
+multidict==7.2.1
+    # via yarl
+playwright==1.61.0
+    # via
+    #   -r backend/app/plugin/infra/crawler/requirements.in
+    #   crawlee
+proclimits==0.2.0
+    # via crawlee
+propcache==0.5.4
+    # via yarl
+protego==0.7.0
+    # via crawlee
+psutil==7.2.2
+    # via crawlee
+pydantic==2.14.4
+    # via
+    #   -r backend/app/plugin/infra/crawler/requirements.in
+    #   crawlee
+    #   pydantic-settings
+pydantic-core==2.50.5
+    # via pydantic
+pydantic-settings==2.16.3
+    # via crawlee
+pyee==13.0.1
+    # via playwright
+python-dotenv==1.2.4
+    # via pydantic-settings
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   crawlee
+    #   pydantic
+    #   pydantic-core
+    #   pydantic-settings
+    #   pyee
+    #   typing-inspection
+typing-inspection==0.4.5
+    # via
+    #   pydantic
+    #   pydantic-settings
+websockets==16.1.1
+    # via -r backend/app/plugin/infra/crawler/requirements.in
+yarl==1.25.1
+    # via crawlee

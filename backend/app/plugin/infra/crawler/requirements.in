@@ -1,0 +1,5 @@
+crawlee[playwright]==1.11.2
+playwright==1.61.0
+httpx==0.28.1
+pydantic>=2.12.5,<3
+websockets>=16,<17
