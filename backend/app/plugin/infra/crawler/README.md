@@ -53,6 +53,24 @@ async def collect_title(url: str):
 
 BrowserJobOptions 支持显式浏览器路径、headless、locale、可选 storage_state、启动参数、入口导航和处理器时限。浏览器显示模式默认有窗口；Linux 对应环境需提供 Xvfb，或明确选择 headless。时限包含 prepare 的执行时间，人工接管需要的等待预算也由业务调用方计入。storage_state 可来自 GuestSessionStore，不从个人浏览器读取。
 
+### 设备配置与受限页面的责任边界（2026-11-25 补充）
+
+站点适配可以显式配置 browser_type（chromium／firefox／webkit）、user_agent、viewport、is_mobile、has_touch、device_scale_factor、extra_http_headers。新增字段为可选，未设置时保留原 Chromium 和原 context 行为；设备字段通过 Playwright context 入口传递，browser_type 用于选择浏览器引擎；不通过启动参数覆盖 UA。Firefox 不接受本接口的 is_mobile 显式设置。UA、视口、触摸及缩放应采用一致的设备配置；这属于设备仿真，不承诺等同真实移动硬件或消除网站验证。不要同时在 extra_http_headers 中配置 User-Agent，统一使用 user_agent。
+
+设备参数在新任务创建 browser context 时生效，不会在运行中自动切换。业务层复用游客状态时，应把设备配置标识加入 GuestSessionStore 的 scope；更换设备配置时使用对应状态，不把不同配置的 Cookie 任意混用。
+
+1688 适配方负责识别最终 URL 中的 `/_____tmd_____/punish`、页面特征及异常响应，保存原因与现场，并按自身策略调用 TrafficGate.cooldown／决定是否弃用游客状态。HTTP 200 不代表已取得有效商品正文；共享引擎不会替业务判断 punish。不得用无上限的外层循环反复创建新任务来重试同一拦截，冷却、重试上限及人工处理出口应在调用方明确。
+
+fingerprint_generator=None 表示不额外生成指纹，不是关闭真实浏览器功能；retry_on_blocked=False、零请求重试和零会话轮换用于让失败明确返回，避免隐藏重试与自动换身份。use_incognito_pages=True 表示页面 context 隔离，可以显式初始化游客状态，不是“关闭反爬”。这些策略保持原默认值，没有运行中自动开启的开关。需要有限的网络重试时，应按网络故障、限流与人机验证分别设计，不把设备配置和重试／会话轮换混为一个总开关。
+
+同一次测试同时更换 PC／移动地址、UA 或其他会话条件，只能证明该组合在当时取得页面，不能据此确认 UA 是唯一原因。站点成功与稳定性需要由适配方分别验收。
+
+### ARM 与资源验收边界
+
+[Playwright 官方系统要求](https://playwright.dev/python/docs/intro#system-requirements)列出特定 Debian／Ubuntu 的 x86-64 和 arm64 支持；arm64 不等于所有 ARM，更不等于 32 位 armv7。Armbian 需核对实际 CPU 架构、用户空间位数、发行版、完整依赖安装、Chromium 启动和沙箱能力，不能仅凭系统名称判定通过。本库的完整锁定运行环境目前只在 Linux x86-64 验收，ARM 上须另跑安装和 offline_smoke；官方浏览器支持不替代整套依赖及实际硬件验收。
+
+1536 MiB 容器、1152 MiB Crawlee 内部预算是单任务验证配置，不是最低内存要求，也不是生产可用容量保证。部署方需核对后台及其他容器占用和峰值。选品现有方案把浏览器放在独立 x86 Collector，Armbian 承载后台；其他业务若选择 Armbian 同机采集，应单独做容量验收。主引擎使用 Playwright 管理的 Chromium；EdgeBrowser 是独立 CDP 辅助入口，Windows 路径查找不代表主引擎依赖 Windows。
+
 引擎延迟导入 Crawlee／Playwright；只导入模块不会要求后台安装浏览器依赖。独立采集环境安装方式：
 
 ```bash

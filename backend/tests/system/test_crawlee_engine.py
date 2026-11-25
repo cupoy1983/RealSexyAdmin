@@ -102,6 +102,56 @@ async def test_cancelled_handler_releases_its_queue(runtime):
     runtime.queues[0].drop.assert_awaited_once()
 
 
+async def test_explicit_device_profile_reaches_context_without_changing_failure_policy(runtime):
+    options = BrowserJobOptions(user_agent="Fixture mobile browser", viewport={"width": 390, "height": 844},
+                                is_mobile=True, has_touch=True, device_scale_factor=3,
+                                extra_http_headers={"X-Fixture-Mode": "mobile"})
+    await run_browser_job("https://fixture.invalid/", AsyncMock(return_value="done"), options=options)
+    settings = runtime.crawlers[0].options
+    context = settings["browser_new_context_options"]
+    assert context["user_agent"] == "Fixture mobile browser"
+    assert context["viewport"] == {"width": 390, "height": 844}
+    assert context["is_mobile"] is True and context["has_touch"] is True
+    assert context["device_scale_factor"] == 3
+    assert context["extra_http_headers"] == {"X-Fixture-Mode": "mobile"}
+    assert settings["fingerprint_generator"] is None
+    assert settings["max_request_retries"] == settings["max_session_rotations"] == 0
+    assert settings["retry_on_blocked"] is False
+
+
+async def test_default_profile_keeps_previous_context_and_browser(runtime):
+    await run_browser_job("https://fixture.invalid/", AsyncMock(return_value=None))
+    settings = runtime.crawlers[0].options
+    assert settings["browser_type"] == "chromium"
+    assert settings["browser_new_context_options"] == {"locale": "en-US", "extra_http_headers": {}}
+
+
+async def test_explicit_browser_type_and_false_flags_preserved(runtime):
+    await run_browser_job("https://fixture.invalid/", AsyncMock(return_value=None),
+                          options=BrowserJobOptions(browser_type="webkit", is_mobile=False, has_touch=False))
+    assert runtime.crawlers[0].options["browser_type"] == "webkit"
+    assert runtime.crawlers[0].options["browser_new_context_options"]["is_mobile"] is False
+
+
+@pytest.mark.parametrize("values", [
+    {"viewport": {"width": 0, "height": 844}},
+    {"viewport": {"width": True, "height": 844}},
+    {"viewport": {"width": 390}},
+    {"is_mobile": 1},
+    {"has_touch": "true"},
+    {"device_scale_factor": float("nan")},
+    {"extra_http_headers": {"X-Fixture": "a\nb"}},
+    {"extra_http_headers": {"User-Agent": "fixture"}},
+    {"user_agent": ""},
+    {"user_agent": "fixture", "launch_args": ("--user-agent=other",)},
+    {"browser_type": "firefox", "is_mobile": True},
+    {"browser_type": "unsupported"},
+])
+def test_invalid_or_conflicting_device_profile_is_rejected(values):
+    with pytest.raises(ValueError):
+        BrowserJobOptions(**values)
+
+
 @pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), False])
 def test_invalid_timeout_rejected_without_installing_browser(value):
     with pytest.raises(ValueError):

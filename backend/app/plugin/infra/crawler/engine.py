@@ -1,10 +1,12 @@
 """Crawlee＋Playwright 单入口运行层；站点及业务处理由回调提供。"""
 
 import math
+import re
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 
@@ -13,10 +15,17 @@ class BrowserJobOptions:
     executable: str | None = None
     headless: bool = False
     locale: str = "en-US"
-    storage_state: dict | None = None
+    storage_state: dict | None = field(default=None, repr=False)
     launch_args: tuple[str, ...] = ("--no-proxy-server",)
     navigation_timeout_seconds: float = 180
     handler_timeout_seconds: float = 600
+    browser_type: Literal["chromium", "firefox", "webkit"] = "chromium"
+    user_agent: str | None = None
+    viewport: dict[str, int] | None = None
+    is_mobile: bool | None = None
+    has_touch: bool | None = None
+    device_scale_factor: float | None = None
+    extra_http_headers: dict[str, str] | None = field(default=None, repr=False)
 
     def __post_init__(self):
         for value in (self.navigation_timeout_seconds, self.handler_timeout_seconds):
@@ -24,6 +33,44 @@ class BrowserJobOptions:
                 raise ValueError("浏览器任务时限必须是正的有限秒数")
         if not self.locale.strip():
             raise ValueError("浏览器 locale 不能为空")
+        if self.browser_type not in {"chromium", "firefox", "webkit"}:
+            raise ValueError("browser_type 仅支持 chromium、firefox、webkit")
+        if self.user_agent is not None:
+            if not isinstance(self.user_agent, str) or not self.user_agent.strip() or len(self.user_agent) > 1024 or any(c in self.user_agent for c in "\r\n\0"):
+                raise ValueError("user_agent 必须是非空单行字符串")
+            if any(arg.startswith("--user-agent") for arg in self.launch_args):
+                raise ValueError("请只通过 user_agent 设置 UA，不要同时提供 --user-agent")
+        if self.viewport is not None and (not isinstance(self.viewport, Mapping) or set(self.viewport) != {"width", "height"}
+                                          or any(type(n) is not int or not 1 <= n <= 16384 for n in self.viewport.values())):
+            raise ValueError("viewport 需要 1～16384 的整数 width 和 height")
+        for name in ("is_mobile", "has_touch"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not bool:
+                raise ValueError(f"{name} 必须是布尔值")
+        if self.browser_type == "firefox" and self.is_mobile is not None:
+            raise ValueError("Firefox 不支持 is_mobile，请省略该参数")
+        if self.device_scale_factor is not None and (type(self.device_scale_factor) not in (int, float)
+                or not math.isfinite(self.device_scale_factor) or self.device_scale_factor <= 0):
+            raise ValueError("device_scale_factor 必须是正的有限数值")
+        if self.extra_http_headers is not None:
+            if not isinstance(self.extra_http_headers, Mapping):
+                raise ValueError("extra_http_headers 必须是字符串映射")
+            for name, value in self.extra_http_headers.items():
+                if not isinstance(name, str) or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", name) or not isinstance(value, str) or any(c in value for c in "\r\n\0"):
+                    raise ValueError("HTTP 请求头名称或值无效")
+                if name.lower() == "user-agent":
+                    raise ValueError("请通过 user_agent 配置 UA，不要放入 extra_http_headers")
+
+
+def _context_options(options):
+    context = {"locale": options.locale, "extra_http_headers": dict(options.extra_http_headers or {})}
+    if options.storage_state:
+        context["storage_state"] = options.storage_state
+    for name in ("user_agent", "viewport", "is_mobile", "has_touch", "device_scale_factor"):
+        value = getattr(options, name)
+        if value is not None:
+            context[name] = dict(value) if name == "viewport" else value
+    return context
 
 
 def check_runtime():
@@ -56,10 +103,9 @@ async def run_browser_job(url: str, handle, *, prepare=None, on_error=None, opti
                 configuration=configuration, event_manager=LocalEventManager(), storage_client=storage,
                 request_manager=queue,
                 concurrency_settings=ConcurrencySettings(min_concurrency=1, max_concurrency=1, desired_concurrency=1),
-                browser_type="chromium", headless=options.headless, fingerprint_generator=None, use_incognito_pages=True,
+                browser_type=options.browser_type, headless=options.headless, fingerprint_generator=None, use_incognito_pages=True,
                 browser_launch_options={"args": list(options.launch_args), **({"executable_path": options.executable} if options.executable else {})},
-                browser_new_context_options={"locale": options.locale, "extra_http_headers": {},
-                                             **({"storage_state": options.storage_state} if options.storage_state else {})},
+                browser_new_context_options=_context_options(options),
                 goto_options={"wait_until": "domcontentloaded"},
                 navigation_timeout=timedelta(seconds=options.navigation_timeout_seconds),
                 request_handler_timeout=timedelta(seconds=options.handler_timeout_seconds),
