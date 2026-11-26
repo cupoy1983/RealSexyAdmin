@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>采集专用浏览器登录</title>
+<style>
+body{margin:20px;background:#111827;color:#e5e7eb;font:16px system-ui}button,input,select{font:inherit;padding:8px;margin:4px;border-radius:6px}button{cursor:pointer}iframe{width:100%;height:76vh;border:1px solid #4b5563}p{line-height:1.6}#message{min-height:26px}.required{color:#f87171}.login-controls{display:flex;align-items:center;flex-wrap:wrap;gap:4px}.session-picker{display:inline-block;position:relative}#session-menu{position:absolute;left:0;top:100%;z-index:10;min-width:240px;background:#1f2937;border:1px solid #6b7280;border-radius:6px;padding:4px}#session-menu button{display:block;width:100%;margin:0;text-align:left;background:transparent;color:inherit;border:0}#session-menu button:hover,#session-menu button:focus{background:#374151}
+</style>
+<h2>采集专用浏览器登录</h2>
+<p>请在下方的 Collector 浏览器中自行登录。会话名用于区分保存的账号，不需要填写真实账号。登录窗口最多保留 15 分钟。</p>
+<div class="login-controls"><label>平台 <select id="platform"></select></label>
+<div class="session-picker"><label>会话名 <span class="required" aria-label="必填">*</span> <input id="account" value="" required maxlength="48" pattern="[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]+" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="session-menu" aria-describedby="account-help" placeholder="选择已保存会话或填写新名称" autocomplete="off"></label><div id="session-menu" role="listbox" aria-label="已保存会话名" hidden></div></div>
+
+<button data-action="start">开始登录</button><button data-action="confirm">校验并保存</button>
+<button data-action="cancel">取消登录</button><button data-action="revoke">删除保存状态</button>
+</div><p id="account-help">不同平台账号请使用不同会话名，例如 user-1688、user-amazon；开始登录后不能更改。</p>
+<p id="message" role="status"></p>
+<iframe title="Collector 专用浏览器" src="/viewer/vnc.html?autoconnect=true&amp;resize=scale&amp;path=viewer/websockify"></iframe>
+<script>
+const platform=document.getElementById('platform'),account=document.getElementById('account'),message=document.getElementById('message'),sessionMenu=document.getElementById('session-menu');
+let savedSessions={};
+function defaultSession(){return 'default-'+platform.value}
+function closeSessions(){sessionMenu.hidden=true;account.setAttribute('aria-expanded','false')}
+function showSessions(){
+  if(account.disabled){closeSessions();return}
+  const names=savedSessions[platform.value]||[];sessionMenu.replaceChildren();
+  for(const name of [...new Set([defaultSession(),...names])]){const option=document.createElement('button');option.type='button';option.role='option';option.textContent=name;option.onmousedown=e=>e.preventDefault();option.onclick=()=>{account.value=name;closeSessions();account.focus()};sessionMenu.append(option)}
+  sessionMenu.hidden=false;account.setAttribute('aria-expanded','true');
+}
+account.addEventListener('focus',showSessions);account.addEventListener('click',showSessions);account.addEventListener('input',()=>account.value.trim()?closeSessions():showSessions());
+account.addEventListener('keydown',e=>{if(e.key==='Escape')closeSessions();if(e.key==='ArrowDown'&&!account.value.trim()){e.preventDefault();showSessions();sessionMenu.querySelector('button')?.focus()}});
+document.addEventListener('click',e=>{if(!e.target.closest('.session-picker'))closeSessions()});
+platform.addEventListener('change',()=>{account.value=defaultSession();closeSessions()});
+let loaded=false;
+function render(state){
+  savedSessions=state.sessions||{};
+  if(!loaded){for(const site of state.platforms){const o=document.createElement('option');o.value=site.id;o.textContent=site.name.replace(/[（(].*$/, '').trim();platform.append(o)}loaded=true;account.value=defaultSession()}
+  if(state.active){platform.value=state.active.platform;account.value=state.active.account}
+  platform.disabled=account.disabled=!!state.active;
+  if(state.active)closeSessions();
+  message.textContent=state.message;
+}
+async function refresh(){try{const r=await fetch('/control/status',{cache:'no-store'});if(!r.ok)throw Error();render(await r.json())}catch{message.textContent='连接已中断，请检查 SSH 转发后刷新页面'}}
+for(const button of document.querySelectorAll('button[data-action]'))button.onclick=async()=>{
+  if(['start','confirm','revoke'].includes(button.dataset.action)){
+    account.value=account.value.trim();
+    if(!account.value){message.textContent='请先选择或填写会话名，以确定本次登录和保存属于哪个账号';if(!account.disabled)account.focus();return}
+    if(!/^[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]{1,48}$/.test(account.value)){message.textContent='会话名须为 1～48 位中文汉字、英文字母、数字、下划线或连字符';if(!account.disabled)account.focus();return}
+  }
+  if(button.dataset.action==='revoke'&&!confirm('撤销这个会话名的采集授权？平台端已登录设备不会自动退出。'))return;
+  for(const b of document.querySelectorAll('button'))b.disabled=true;
+  try{const r=await fetch('/control/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:button.dataset.action,platform:platform.value,account:account.value})});const data=await r.json();if(!r.ok)throw Error(data.error);render(data)}catch(e){message.textContent=e.message}
+  finally{for(const b of document.querySelectorAll('button'))b.disabled=false}
+};
+refresh();setInterval(refresh,5000);
+</script>
+</html>

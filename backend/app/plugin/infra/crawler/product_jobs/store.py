@@ -1,0 +1,102 @@
+import hashlib
+import json
+import os
+import sqlite3
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from uuid import uuid4
+
+from .schema import JobError, REASONS, TERMINAL
+
+
+class JobStore:
+    def __init__(self, path: Path, *, capacity=1000, retention_seconds=604800, clock=time.time):
+        self.path, self.capacity, self.retention, self.clock = Path(path), capacity, retention_seconds, clock
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.path.is_symlink():
+            raise ValueError("执行队列不能为符号链接")
+        with self.connection() as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("""CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY, owner TEXT NOT NULL, idem TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                request TEXT NOT NULL, state TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
+                reason TEXT, diagnostic TEXT, result TEXT, UNIQUE(owner, idem))""")
+            db.execute("CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(state,created,id)")
+        self.path.chmod(0o600)
+
+    @contextmanager
+    def connection(self):
+        db = sqlite3.connect(self.path, timeout=5)
+        db.row_factory = sqlite3.Row
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    def submit(self, owner, key, request):
+        body = json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        fingerprint = hashlib.sha256(body.encode()).hexdigest()
+        now = self.clock()
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("DELETE FROM jobs WHERE state NOT IN ('queued','running') AND updated < ?", (now-self.retention,))
+            old = db.execute("SELECT * FROM jobs WHERE owner=? AND idem=?", (owner, key)).fetchone()
+            if old:
+                if old["fingerprint"] != fingerprint:
+                    raise JobError(409, "idempotency_conflict")
+                return self.metadata(old), True
+            if db.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')").fetchone()[0] >= self.capacity:
+                raise JobError(429, "queue_full")
+            identifier = uuid4().hex
+            db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,'queued',?,?,NULL,NULL,NULL)",
+                       (identifier, owner, key, fingerprint, body, now, now))
+            row = db.execute("SELECT * FROM jobs WHERE id=?", (identifier,)).fetchone()
+            return self.metadata(row), False
+
+    @staticmethod
+    def metadata(row):
+        request = json.loads(row["request"])
+        return {"job_id": row["id"], **request, "state": row["state"], "created_at": row["created"],
+                "updated_at": row["updated"], "error_code": row["reason"], "diagnostic_id": row["diagnostic"],
+                "result_ready": row["state"] == "succeeded"}
+
+    def get(self, owner, identifier, *, result=False):
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM jobs WHERE id=? AND owner=?", (identifier, owner)).fetchone()
+            if row is None:
+                raise JobError(404, "job_not_found")
+            if not result:
+                return self.metadata(row)
+            if row["state"] != "succeeded":
+                raise JobError(409, "result_not_ready", {"state": row["state"], "error_code": row["reason"]})
+            return json.loads(row["result"])
+
+    def claim(self):
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT * FROM jobs WHERE state='queued' ORDER BY created,id LIMIT 1").fetchone()
+            if row is None:
+                return None
+            db.execute("UPDATE jobs SET state='running',updated=? WHERE id=?", (self.clock(), row["id"]))
+            return {"job_id": row["id"], "request": json.loads(row["request"])}
+
+    def finish(self, identifier, state, *, result=None, reason=None, diagnostic=None):
+        if state not in TERMINAL or (reason is not None and reason not in REASONS):
+            raise ValueError("任务结束状态无效")
+        if state == "succeeded" and not isinstance(result, dict):
+            raise ValueError("成功任务必须有结果")
+        data = json.dumps(result, ensure_ascii=False, allow_nan=False) if state == "succeeded" else None
+        if data and len(data.encode()) > 1024*1024:
+            raise ValueError("商品结果超过上限")
+        with self.connection() as db:
+            changed = db.execute("UPDATE jobs SET state=?,updated=?,reason=?,diagnostic=?,result=? WHERE id=? AND state='running'",
+                                 (state, self.clock(), reason, diagnostic, data, identifier)).rowcount
+            if changed != 1:
+                raise ValueError("任务已结束或不在执行中")
+
+    def recover(self):
+        with self.connection() as db:
+            return db.execute("UPDATE jobs SET state='failed',reason='process_interrupted',updated=? WHERE state='running'",
+                              (self.clock(),)).rowcount

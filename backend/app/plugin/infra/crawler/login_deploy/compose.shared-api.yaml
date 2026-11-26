@@ -1,0 +1,10 @@
+# Load after the login component's compose file to enable shared service auth.
+services:
+  browser-login:
+    environment:
+      COLLECTOR_SERVICE_REGISTRY: /service-auth/clients.json
+    volumes:
+      - type: bind
+        source: ${PRODUCT_JOB_CLIENT_REGISTRY:?Set the private service digest registry}
+        target: /service-auth/clients.json
+        read_only: true

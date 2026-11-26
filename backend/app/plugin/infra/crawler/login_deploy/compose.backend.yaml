@@ -1,0 +1,11 @@
+# 在基础 compose.yaml 后显式加载；无后台地址时独立登录界面仍可使用。
+services:
+  browser-login:
+    environment:
+      LOGIN_API_URL: ${LOGIN_API_URL:?Set the backend HTTPS API root}
+      LOGIN_CREDENTIALS_FILE: /credentials/collector.json
+    volumes:
+      - type: bind
+        source: ${LOGIN_MACHINE_CREDENTIALS:?Set the private machine credentials file}
+        target: /credentials/collector.json
+        read_only: true

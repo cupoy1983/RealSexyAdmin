@@ -8,6 +8,7 @@
 | `browser.EdgeBrowser` | 独立 Edge／CDP 会话及可选导航节奏控制 |
 | `traffic.TrafficGate` | 单执行端的主动导航间隔与跨重启冷却 |
 | `session.GuestSessionStore` | 作用域绑定、有期限、域名白名单的私有游客 Cookie 存储 |
+| `auth_session.AuthSessionStore` | 平台／账号／设备作用域内的私有授权状态保存、加载、过期及删除；由站点适配判定登录成功 |
 | `snapshot.SNAPSHOT_SCRIPT`、`safe_url` | 生成禁网、去脚本的离线 HTML 与规整页面地址 |
 | `interactive.frame`、`interact` | 当前页面截图及调用方已授权的人工交互原语 |
 | `http.retry_after_seconds` | 有限范围的 HTTP Retry-After 解析 |
@@ -32,7 +33,11 @@ Python 版本沿用仓库的 3.12 及以上要求。更新主分支后，在自�
 
 仅使用标准库工具的模块不需要安装浏览器。使用 Playwright 的独立执行端自行管理其依赖，不向整个后台追加采集运行环境。
 
+本目录 requirements.txt 是独立采集运行环境的锁，不是后台依赖清单，不能直接安装到 OA／主后台 venv。采集锁与后台锁可能存在不同的精确版本（例如 greenlet）；应分别维护、构建和验收。engine 模块本身延迟导入采集依赖，后台可以导入 BrowserJobOptions 等纯配置类型；真正执行 run_browser_job 才需要完整采集运行环境。生产触发链路应由后台提交任务给独立 worker，再接收结果，不在 HTTP 请求处理器内直接启动浏览器。具体任务 API、队列或跨进程调用由业务模块设计。
+
 ## Crawlee＋Playwright 运行层
+
+商品中心主动提交商品链接可使用独立 `product_jobs` 服务：异步提交、状态与结果、调用方鉴权和私有持久化执行队列；后台 SDK 为 `product_jobs.client.ProductJobsClient`，不需要在业务后台安装浏览器依赖。部署、接口和商品中心登录／采集连接顺序见 [商品链接采集任务 API](./INTEGRATION.md)。该服务不写商品表、不提供前端业务页面，也不替代选品 worker 协议。
 
 后续需要浏览器渲染或交互的站点适配共用本运行层。Crawlee 管理请求队列、浏览器任务和生命周期，Playwright 提供 context.page 上的页面导航及交互；不同站点各自提供准备、数据处理和失败翻译回调。可使用官方 API 或纯 HTTP 的来源，由业务模块选择更轻的适配方式。
 
@@ -64,6 +69,14 @@ BrowserJobOptions 支持显式浏览器路径、headless、locale、可选 stora
 fingerprint_generator=None 表示不额外生成指纹，不是关闭真实浏览器功能；retry_on_blocked=False、零请求重试和零会话轮换用于让失败明确返回，避免隐藏重试与自动换身份。use_incognito_pages=True 表示页面 context 隔离，可以显式初始化游客状态，不是“关闭反爬”。这些策略保持原默认值，没有运行中自动开启的开关。需要有限的网络重试时，应按网络故障、限流与人机验证分别设计，不把设备配置和重试／会话轮换混为一个总开关。
 
 同一次测试同时更换 PC／移动地址、UA 或其他会话条件，只能证明该组合在当时取得页面，不能据此确认 UA 是唯一原因。站点成功与稳定性需要由适配方分别验收。
+
+### 专用浏览器人工登录
+
+已验收中文环境的原生稳定版 Chrome 可通过 `LOGIN_BROWSER_MODE=native` 启用 `NativeLoginManager`，仅附加连接容器回环 CDP 以校验和导出专用会话。需要包含原生 Chrome 与中文显示／输入依赖的部署镜像，不适用于仅有 Playwright Chromium 的基础镜像。账号 profile 隔离、共享授权目录、正式入口和验收边界见 [中文原生浏览器正式会话](./INTEGRATION.md)。
+
+`login_service` 和 `login_deploy/` 提供显式启动的独立登录应用，不随 import 启动。Ubuntu Server 上使用虚拟显示与 noVNC，让使用者通过受保护的窗口自行登录；不读取个人浏览器 profile。入口须通过 SSH 本地转发，整个页面及 WebSocket 均要求额外 HTTP 认证。站点入口、允许域名及成功标志通过私有配置提供，不能仅凭点击“完成”判定成功。授权状态保存到独立 AuthSessionStore，供同机业务执行端显式加载到 BrowserJobOptions.storage_state；不会自动把游客任务改成账号任务。其他平台可复用机制，仍须分别实现并验收站点适配。
+
+实施范围、登录状态的存放边界和部署步骤见 [Collector 专用浏览器登录](./INTEGRATION.md)。当前远程页面与后台菜单尚未连接，不能将已有 Amazon 验证截图接口直接当作登录入口。
 
 ### ARM 与资源验收边界
 
@@ -128,6 +141,8 @@ async def open_guest_context(browser, state_dir: Path):
 
 scope 必须包含会影响数据口径的市场／地区等条件。域名采用去掉前导点之后的精确白名单匹配，不自动放行所有子域名；仅存储 Cookie，不保存 localStorage。六小时是初始默认值；同一有效文件反复保存不会延长已有到期时间。Cookie 文件与其他私有状态都不进入公开上传、源码或普通观测备份。
 
+GuestSessionStore 只处理游客 Cookie，不是完整登录态存储。六小时为可配置的本地保留期限，不能保证 Cookie 或服务端会话在此期间始终有效。需要授权登录态的业务，应自行管理账号隔离、跨域状态及有效性验证；必要时使用 Playwright storage_state 保存所需的 Cookie、localStorage 或按需启用的 IndexedDB。不要把登录态直接送进 GuestSessionStore.save，否则非 Cookie 状态会被丢弃。完整授权状态可通过 BrowserJobOptions.storage_state 传入，不需要扩展游客存储的默认职责。
+
 ## 输出契约及调用方责任
 
 - `TrafficGate.navigate(interval_seconds=...)` 等待现有冷却及更长的导航间隔，并原子记录本次主动导航时间；不会自动识别网站拒绝，也不会自动重试请求。冷却原因和时间由调用方传入。损坏的节奏状态会抛出错误，不能忽略错误继续领取。
@@ -138,6 +153,10 @@ scope 必须包含会影响数据口径的市场／地区等条件。域名采�
 - 私有 JSON 使用原子替换及私有文件权限，拒绝目标文件符号链接。选择私有且可信的目录、进程互斥和磁盘备份仍由调用方负责。
 
 异常和截图是否代表商品、能否继续任务、是否允许人工操作都由业务层判断。此库提供浏览器机制，不能单凭工具调用成功认定某站点已采集成功。
+
+特别注意：SNAPSHOT_SCRIPT 删除副本中的全部 script，内联 JSON／应用初始化状态也会被删除。部分站点（包括某些 1688 页面）的 offerInfoModel、currentPrices、skuImages、skuWeight 等数据可能保存在其中，因此不能把该离线 HTML 当作完整商品数据或可重放的原始响应。适配方应在原页面有效期间通过 page.evaluate／明确的数据响应读取白名单业务字段，分别保存字段来源、采集条件和时间；快照用于人工审阅及诊断。脚本处理的是克隆副本，不会删除原页面的 script，也不会阻止随后对原页面取数。不要把整个 window／登录状态对象当作商品证据保存。
+
+价格和 SKU 完整性由业务适配验收：档位数量按商品实际返回记录，不预设必有三档；缺少 skuProps／skuMap 或只有一档价格时，应区分商品本身没有这些结构、登录／权限限制、异步数据未加载和解析结构变化。浏览器可执行脚本和加载后续页面数据，但不保证获得未经授权的数据；某个未登录样本的缺失结果不能推广成“浏览器渲染不会改变”，登录也不保证补齐所有字段。
 
 ## 独立部署及验证
 
@@ -161,3 +180,6 @@ uv run --project backend ruff check backend/app/plugin/infra/crawler backend/tes
 修复流程为：复现 → 在共享测试补回归 → 修复机制 → 检查已有调用方兼容性 → 更新文档及提交。默认保留现有导入与参数语义；确需不兼容变更时，先明确受影响调用方和迁移方法，再实施。使用方可提出修复或 PR，共享实现保持一份，不复制到各业务模块中分别维护。
 
 2026-11-25 首次共享交付：包含 Crawlee＋Playwright 通用运行层、锁定的可选运行依赖、浏览器连接、私有状态、访问节奏与冷却、游客会话、HTML 快照、人工交互原语及回归测试；不包含选品业务、凭据、服务器配置、数据库迁移或自动采集计划。
+# 共享 Collector 业务接入
+
+各中心后台通过 `collector_client.CollectorClient` 调用商品任务和平台会话接口，不需要导入浏览器运行依赖，也不依赖选品控制器。完整接口和鉴权约定见 [Collector 共享基础接口](./INTEGRATION.md)。原 `product_jobs.client.ProductJobsClient` 与选品会话桥接继续兼容。

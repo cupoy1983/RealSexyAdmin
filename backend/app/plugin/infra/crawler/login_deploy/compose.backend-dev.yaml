@@ -1,0 +1,12 @@
+# 仅用于明确启用的 SSH 开发隧道，不在生产加载。
+services:
+  browser-login:
+    environment:
+      LOGIN_DEV_SOCKET: /run/selection-dev/api.sock
+    group_add:
+      - "${LOGIN_RELAY_GID:?Set the socket owner group}"
+    volumes:
+      - type: bind
+        source: ${LOGIN_RELAY_DIR:?Set the private development socket directory}
+        target: /run/selection-dev
+        read_only: true

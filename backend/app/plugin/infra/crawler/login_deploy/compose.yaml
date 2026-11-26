@@ -1,0 +1,23 @@
+name: realsexy-browser-login
+services:
+  browser-login:
+    image: crawler-browser-login:local
+    build:
+      context: ../../../../../..
+      dockerfile: backend/app/plugin/infra/crawler/login_deploy/Dockerfile
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LOGIN_PORT:-18120}:8080"
+    volumes:
+      - ${LOGIN_CONFIG_DIR:?Set LOGIN_CONFIG_DIR}:/config:ro
+      - ${LOGIN_DATA_DIR:?Set LOGIN_DATA_DIR}:/data
+    shm_size: 256m
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    cpus: 1
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
