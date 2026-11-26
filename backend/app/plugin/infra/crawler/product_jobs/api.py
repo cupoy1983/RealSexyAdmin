@@ -45,7 +45,8 @@ def handler(store, registry):
                 if self.command == "GET" and target.path == "/v1/capabilities":
                     return self.reply(200, {"protocol_version": 1, "result_version": 1, "platforms": ["1688"],
                                             "states": ["queued","running","succeeded","failed","needs_login","needs_verification"],
-                                            "max_running": 1, "idempotency_retention_seconds": store.retention})
+                                            "max_running": 1, "idempotency_retention_seconds": store.retention,
+                                            "save_modes": ["overwrite", "history"], "default_save_mode": "overwrite"})
                 if self.command == "POST" and target.path == "/v1/jobs":
                     if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                         raise JobError(422, "invalid_request")

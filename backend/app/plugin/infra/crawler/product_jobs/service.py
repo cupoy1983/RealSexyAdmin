@@ -2,6 +2,8 @@ import asyncio
 import os
 import signal
 import threading
+import time
+import logging
 from functools import partial
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -11,14 +13,22 @@ from ..traffic import TrafficGate
 from .ali1688 import CollectionFailure, collect
 from .api import handler
 from .store import JobStore
+from .schema import JobError
+from .lifecycle import clean_files
 
 
 class JobRunner:
-    def __init__(self, store, adapter, *, gate=None, timeout=120, results_dir=None):
+    def __init__(self, store, adapter, *, gate=None, timeout=120, results_dir=None, diagnostics_dir=None):
         self.store, self.adapter, self.gate, self.timeout = store, adapter, gate, timeout
         self.results_dir = Path(results_dir) if results_dir else None
+        self.diagnostics_dir = Path(diagnostics_dir) if diagnostics_dir else None
+        self.last_maintenance = 0
 
     async def run_once(self):
+        if time.monotonic() - self.last_maintenance >= 60:
+            self.store.maintain()
+            clean_files(self.store, self.results_dir, self.diagnostics_dir)
+            self.last_maintenance = time.monotonic()
         if self.gate and self.gate.remaining > 0:
             return False
         job = self.store.claim()
@@ -28,8 +38,14 @@ class JobRunner:
         try:
             if self.gate:await self.gate.navigate()
             result=await asyncio.wait_for(self.adapter(job['request'],identifier),timeout=self.timeout)
-            if self.results_dir:write_private_json(self.results_dir/(identifier+'.json'),result)
             self.store.finish(identifier,'succeeded',result=result)
+            if self.results_dir:
+                try:
+                    result = self.store.get(job['owner'], identifier, result=True)
+                    write_private_json(self.results_dir/(identifier+'.json'),result)
+                except Exception:
+                    # SQLite remains the source of truth if optional export fails.
+                    logging.getLogger(__name__).warning('Optional result export unavailable for job %s', identifier)
         except CollectionFailure as error:
             self.store.finish(identifier,error.state,reason=error.reason,diagnostic=error.diagnostic)
         except asyncio.TimeoutError:
@@ -39,6 +55,7 @@ class JobRunner:
             raise
         except Exception:
             self.store.finish(identifier,'failed',reason='internal_error')
+        clean_files(self.store, self.results_dir, self.diagnostics_dir)
         return True
 
     async def serve(self):
@@ -63,7 +80,7 @@ async def main():
     registry=os.environ['COLLECTOR_CLIENT_REGISTRY']
     server=ThreadingHTTPServer(('0.0.0.0',8090),handler(store,registry));server.daemon_threads=True
     threading.Thread(target=server.serve_forever,daemon=True).start()
-    runner=JobRunner(store,adapter,gate=gate,results_dir=os.environ.get('COLLECTOR_RESULT_DIR','/data/product-results'))
+    runner=JobRunner(store,adapter,gate=gate,results_dir=os.environ.get('COLLECTOR_RESULT_DIR','/data/product-results'),diagnostics_dir=root/'diagnostics')
     task=asyncio.create_task(runner.serve())
     stop=asyncio.Event();loop=asyncio.get_running_loop()
     for sig in (signal.SIGINT,signal.SIGTERM):loop.add_signal_handler(sig,stop.set)

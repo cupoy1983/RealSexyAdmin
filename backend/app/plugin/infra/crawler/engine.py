@@ -18,6 +18,7 @@ class BrowserJobOptions:
     storage_state: dict | None = field(default=None, repr=False)
     launch_args: tuple[str, ...] = ("--no-proxy-server",)
     navigation_timeout_seconds: float = 180
+    navigation_wait_until: Literal['commit', 'domcontentloaded', 'load'] = 'domcontentloaded'
     handler_timeout_seconds: float = 600
     browser_type: Literal["chromium", "firefox", "webkit"] = "chromium"
     user_agent: str | None = None
@@ -28,6 +29,8 @@ class BrowserJobOptions:
     extra_http_headers: dict[str, str] | None = field(default=None, repr=False)
 
     def __post_init__(self):
+        if self.navigation_wait_until not in {'commit', 'domcontentloaded', 'load'}:
+            raise ValueError('Invalid navigation wait condition')
         for value in (self.navigation_timeout_seconds, self.handler_timeout_seconds):
             if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
                 raise ValueError("浏览器任务时限必须是正的有限秒数")
@@ -106,7 +109,7 @@ async def run_browser_job(url: str, handle, *, prepare=None, on_error=None, opti
                 browser_type=options.browser_type, headless=options.headless, fingerprint_generator=None, use_incognito_pages=True,
                 browser_launch_options={"args": list(options.launch_args), **({"executable_path": options.executable} if options.executable else {})},
                 browser_new_context_options=_context_options(options),
-                goto_options={"wait_until": "domcontentloaded"},
+                goto_options={"wait_until": options.navigation_wait_until},
                 navigation_timeout=timedelta(seconds=options.navigation_timeout_seconds),
                 request_handler_timeout=timedelta(seconds=options.handler_timeout_seconds),
                 max_requests_per_crawl=1, max_request_retries=0, max_session_rotations=0,

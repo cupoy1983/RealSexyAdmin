@@ -2,6 +2,14 @@
 
 ## 共享能力
 
+### 采集异常与会话状态同步（2026-11-27）
+
+1688 任务适配器在返回 needs_login／needs_verification 前，使用 SessionHealth 将 login_required／verification_required（访问拒绝则为 access_denied）写入对应授权版本的共享健康记录。无论引擎返回失败对象还是直接抛出 CollectionFailure，都必须先同步再结束任务。会话 status 优先读取该记录，立即覆盖十二小时正常缓存；网络错误保持 network_error，不解释成掉线。旧授权版本的迟到结果不影响新登录。
+
+商品中心拿到这些任务终态后，仅刷新 session_status(platform, session_name)，按返回的 state／reason 显示人工入口，不自动 force=true。不需要新增 report API，也不要由前端伪造 Collector 的会话事实。force=true 仅供明确的实际复查。
+
+部署必须让登录服务与商品任务服务的 COLLECTOR_SESSION_HEALTH_DIR 指向同一可读写数据卷；仅存在 session_health.py 不代表挂载已接通。可通过 compose.session-health.yaml 或选品部署覆盖文件配置。对接使用本文件当前版本，旧版“六十秒缓存、needs_login 后强制复查”说明已失效。
+
 本包包含 Crawlee＋Playwright 运行层、访问节奏与冷却、游客 Cookie 与平台授权存储、专用浏览器人工登录、任务与会话 API、后台客户端、异常现场保存、访问异常识别和私有文件原子写入。业务任务关联、用户权限、类目、调度目标与商品入库由各中心负责。备份校验框架未提取；原子写入不等于整批事务或完整掉电恢复。
 
 `state.write_private_bytes` 和 `write_private_json` 使用同目录唯一临时文件、0600 权限、flush／fsync 和 os.replace；失败保留旧文件并清理临时文件。Windows 短暂占用有限重试。异常现场使用 diagnostics 的遮罩、大小限制和 SHA256 清单；不会因留证失败覆盖原业务错误。HTTP 403 识别为 access_denied，不作为登录失效或验证码的充分证据。
@@ -23,6 +31,14 @@ async with CollectorClient.from_file(private_config_path) as client:
 共享服务级身份隔离不能替代业务用户权限。各中心 controller 验证本中心权限，service 保存系统用户与 job_id／operation_id 的归属，再代调 Collector。
 
 ## 任务接口
+
+### 结果保留模式（2026-11-27）
+
+POST /v1/jobs 新增 save_mode：overwrite（默认，商品中心）或 history（显式保留历史）。SDK submit 接受同名参数。模式不改变幂等规则，也不禁止重新采集。覆盖范围为同一调用方、平台、规范商品 URL、会话名；不同账号及调用方不能互相覆盖。只有成功结果替换当前结果，失败不覆盖；按提交先后防止旧任务迟到覆盖新任务。
+
+overwrite 成功后立即释放该范围较早覆盖任务的结果正文，并清理对应结果 JSON 和失败诊断文件。任务元数据和幂等键保留七天，旧结果接口返回 result_superseded（410），并给出替代任务标识，不能偷偷返回另一次采集结果。新结果缺失的字段保留旧有效值，并记录各字段的来源采集时间，不把旧字段冒充本次新采集。history 任务不参与覆盖清理，显式长期保留，由所属中心另定历史清理规则；选品既有批次和备份不变。
+
+失败诊断和已被替代的任务记录使用七天兜底期限，执行器空闲轮询时也执行清理，不依赖新任务提交。当前有效结果不因任务超过七天而删除。清理只处理队列登记的结果文件与诊断标准文件，拒绝符号链接和越界路径；失败清理可重试。既有未登记孤立文件不自动推断归属或批量删除。此阶段不提供跨中心数据共享、免采复用查询或人工入库确认协议。
 
 前缀 `/collector/v1`，所有请求使用独立 `Authorization: Bearer <service-key>`。
 

@@ -50,7 +50,8 @@ def normalize(raw, request, final_url):
     if identifiers and not matching:
         raise CollectionFailure('failed', 'identity_mismatch')
     offer = matching[0] if matching else next((o for o in offers if not o.get('offerId')), {})
-    title = str(offer.get('subject') or offer.get('title') or raw.get('title') or '').strip()
+    offer_title = str(offer.get('subject') or offer.get('offerTitle') or offer.get('title') or '').strip()
+    title = offer_title or str(raw.get('title') or '').strip()
     if not title or title in {'阿里巴巴', '1688', '阿里巴巴1688', '1688首页'}:
         raise CollectionFailure('failed', 'unsupported_page')
     prices = []
@@ -70,14 +71,24 @@ def normalize(raw, request, final_url):
         variants.append({'source_sku_id': item.get('skuId'), 'spec_key': item.get('spec_key'),
                          'price': money(item.get('price') if item.get('price') is not None else item.get('discountPrice')),
                          'available_quantity_raw': item.get('canBookCount'),
-                         'weight_raw': item.get('skuWeight')})
+                         'weight_raw': item.get('skuWeight'), 'weight_unit': item.get('weight_unit')})
     result={'result_version':1,'platform':'1688','source_id':source_id,'url':request['url'],'collected_at':time.time(),
             'title':title[:1000],'images':images,'currency':'CNY','price_tiers':prices,
             'sku':{'properties':raw.get('properties',[])[:30],'variants':variants},
             'weight_raw':raw.get('weight') or offer.get('skuWeight'),'missing_fields':[],
-            'warnings':[],'field_sources':{'title':'page_data' if offer else 'dom','images':'dom','price_tiers':'page_data','sku':'page_data','currency':'platform_default'}}
+            'warnings':[],'field_sources':{'title':'page_data' if offer_title else 'dom','images':raw.get('image_source','dom') if images else None,'price_tiers':'page_data' if prices else None,'sku':'page_data' if variants else None,'currency':'platform_default'}}
+    price_range = raw.get('price_range') or {}
+    bounds = {key: money(price_range.get(key)) for key in ('min', 'max')}
+    if all(value is not None for value in bounds.values()):
+        result['price_range'] = bounds
+        result['field_sources']['price_range'] = 'page_data'
+    if raw.get('parser'):
+        result['parser'] = raw['parser']
+        result['page_type'] = 'product_detail'
+        result['price_type'] = raw.get('price_type')
+        result['weight_unit'] = raw.get('weight_unit')
     result['missing_fields']=[k for k,v in [('images',images),('price_tiers',prices),('sku',variants),('weight',result['weight_raw'])] if not v]
-    if not prices:result['warnings'].append('price_unavailable')
+    if not prices and not result.get('price_range') and not any(v['price'] is not None for v in variants):result['warnings'].append('price_unavailable')
     if not variants:result['warnings'].append('sku_unavailable')
     for key in ['price_tiers']:
         result[key]=list({json.dumps(p,sort_keys=True):p for p in result[key]}.values())
@@ -87,6 +98,18 @@ def normalize(raw, request, final_url):
 
 
 capture = capture_diagnostic
+
+
+async def read_product_data(page):
+    # Meta tags can arrive before hydration. Keep retries bounded, including
+    # for single-SKU/no-tier pages, and classify access after the final read.
+    raw = await page.evaluate(EXTRACT)
+    for _ in range(8):
+        if raw.get('offers') and (raw.get('prices') or raw.get('price_range')) and raw.get('variants'):
+            break
+        await asyncio.sleep(0.5)
+        raw = await page.evaluate(EXTRACT)
+    return raw
 
 
 async def collect(request, job_id, *, auth_dir, config_path, diagnostics_dir, executable, gate):
@@ -153,6 +176,7 @@ async def collect(request, job_id, *, auth_dir, config_path, diagnostics_dir, ex
         try:
             await page.locator('h1,meta[property="og:title"],input[type="password"],.nc-container,#baxia-dialog-content').first.wait_for(state='attached',timeout=12000)
         except Exception:pass
+        raw = await read_product_data(page)
         body=(await page.locator('body').inner_text())[:5000]
         signal = await inspect_access(page, site={**site, 'challenge_selectors': list(dict.fromkeys([*site.get('challenge_selectors', []), '.nc-container,#baxia-dialog-content,#nocaptcha']))}, status=status, include_password=True)
         if signal['reason'] == 'page_changing':
@@ -165,7 +189,7 @@ async def collect(request, job_id, *, auth_dir, config_path, diagnostics_dir, ex
             raise CollectionFailure('needs_login','login_required',await capture(page,diagnostics_dir,'login_required'))
         if any(text in body for text in ['该商品不存在','商品已下架','您访问的页面不存在']):
             raise CollectionFailure('failed','unsupported_page',await capture(page,diagnostics_dir,'unsupported_page'))
-        try:return normalize(await page.evaluate(EXTRACT),request,page.url)
+        try:return normalize(raw,request,page.url)
         except CollectionFailure as error:
             error.diagnostic=await capture(page,diagnostics_dir,error.reason)
             raise
@@ -183,6 +207,9 @@ async def collect(request, job_id, *, auth_dir, config_path, diagnostics_dir, ex
         result=await run_browser_job(request['url'],handle,prepare=prepare,on_error=on_error,
             options=BrowserJobOptions(executable=executable,locale='zh-CN',viewport={'width':1280,'height':720},
                 storage_state=state,launch_args=('--no-sandbox',),navigation_timeout_seconds=60,handler_timeout_seconds=90))
+    except CollectionFailure as error:
+        report_failure(error)
+        raise
     except asyncio.CancelledError:
         report_failure(CollectionFailure('failed', 'collection_interrupted'))
         raise

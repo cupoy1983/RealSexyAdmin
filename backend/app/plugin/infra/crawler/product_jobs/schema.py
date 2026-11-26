@@ -1,5 +1,6 @@
 import re
 from urllib.parse import urlsplit
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
@@ -9,6 +10,7 @@ class JobRequest(BaseModel):
     platform: str = Field(pattern=r"^1688$")
     url: str = Field(max_length=2048)
     session_name: str = Field(pattern=r"^[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]{1,48}$")
+    save_mode: Literal['overwrite', 'history'] = 'overwrite'
 
     @field_validator('session_name', mode='before')
     @classmethod

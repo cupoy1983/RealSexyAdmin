@@ -183,3 +183,5 @@ uv run --project backend ruff check backend/app/plugin/infra/crawler backend/tes
 # 共享 Collector 业务接入
 
 各中心后台通过 `collector_client.CollectorClient` 调用商品任务和平台会话接口，不需要导入浏览器运行依赖，也不依赖选品控制器。完整接口和鉴权约定见 [Collector 共享基础接口](./INTEGRATION.md)。原 `product_jobs.client.ProductJobsClient` 与选品会话桥接继续兼容。
+
+`BrowserJobOptions.navigation_wait_until` 默认 `domcontentloaded`，可显式选择 `commit` 或 `load`。选择 `commit` 的调用方必须在业务回调等待真实内容或验证页面、检查响应状态与目标主机；收到响应本身不能作为采集成功。网络导航时限与人工接管时间分开配置，避免尚未进入处理器时额外空等人工操作预算。

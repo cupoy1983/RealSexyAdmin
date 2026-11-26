@@ -123,7 +123,16 @@ async def test_default_profile_keeps_previous_context_and_browser(runtime):
     await run_browser_job("https://fixture.invalid/", AsyncMock(return_value=None))
     settings = runtime.crawlers[0].options
     assert settings["browser_type"] == "chromium"
+    assert settings['goto_options']['wait_until'] == 'domcontentloaded'
     assert settings["browser_new_context_options"] == {"locale": "en-US", "extra_http_headers": {}}
+
+
+async def test_explicit_commit_navigation_preserves_default_for_other_callers(runtime):
+    await run_browser_job('https://fixture.invalid/', AsyncMock(return_value=None),
+                          options=BrowserJobOptions(navigation_wait_until='commit'))
+    assert runtime.crawlers[0].options['goto_options'] == {'wait_until': 'commit'}
+    with pytest.raises(ValueError):
+        BrowserJobOptions(navigation_wait_until='networkidle')
 
 
 async def test_explicit_browser_type_and_false_flags_preserved(runtime):
