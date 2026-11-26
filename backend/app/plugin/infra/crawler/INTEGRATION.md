@@ -43,7 +43,7 @@ async with CollectorClient.from_file(private_config_path) as client:
 - GET `/sessions/operations/{id}`：轮询操作。
 - POST `/sessions/operations/{id}/entry`：access 完成后领取一次性入口票据。
 
-对应 SDK 方法为 session_status、check_session、login_access、session_operation、login_entry。实际检查缓存六十秒；文件变化、过期或服务重启会失效。任务报告 needs_login 后应 force=true 复查。窗口串行，占用时返回 window_busy；操作记录十分钟，入口票据九十秒且只领取一次。领取响应丢失后重新申请 access，不重试消费同一入口。
+对应 SDK 方法为 session_status、check_session、login_access、session_operation、login_entry。成功验证后十二小时内，普通查询与非强制检查直接复用，不启动浏览器；验证时间与授权版本持久保存，服务重启不清除正常结论。授权过期或采集报告登录失效、验证码、访问拒绝或网络异常时失效。普通检查使用 force=false，仅明确强制复查时使用 force=true。十二小时不是平台保证 Cookie 必定有效。窗口串行，占用时返回 window_busy；操作记录十分钟，入口票据九十秒且只领取一次。领取响应丢失后重新申请 access，不重试消费同一入口。
 
 用户在专用浏览器完成平台登录，再点击“校验并保存”。不会读取日常浏览器 profile。会话名支持一至四十八位中文汉字、ASCII 字母、数字、下划线与连字符；不接受空格、斜线、点和控制字符。默认名是命名约定，不代表已保存状态。旧会话可能叫 default，不自动迁移为 default-1688。
 
@@ -68,3 +68,26 @@ login_entry 默认采用服务地址 origin 拼接 `/entry`。服务地址与用
 ## 验证
 
 共享测试位于 backend/tests/system 的 test_crawler*、test_crawlee_engine、test_native_crawler_login、test_collector*、test_platform_session* 和 test_product_jobs_client。离线浏览器 smoke 见 examples/offline_smoke.py；ARM 部署仍需单独验证。
+
+
+## 十二小时会话复用部署
+
+成功保存的授权含 verified_at 与独立 generation；健康记录按授权版本隔离，旧任务的迟到失败不能覆盖新登录。已知验证码不因缓存升级而清除；旧授权文件没有验证时间时不凭空续为正常。
+
+登录服务与商品执行器须同时配置 COLLECTOR_SESSION_HEALTH_DIR，并挂载同一私有可写 session-health 卷；商品执行器的授权目录保持只读。两个服务都定义好后，可叠加 login_deploy/compose.session-health.yaml。采集异常会写该目录，使正常缓存失效。故障记录不包含 Cookie；备份与保留规则仍由部署方决定。
+
+站点配置中的 ttl_seconds 也需设为 43200，否则授权文件可能在正常缓存到期前失效。旧选品桥接的默认 check 同样复用缓存；显式强制检查才打开浏览器。当前已有异常仍需先处理异常，不能把延长缓存当作验证通过。
+
+## 自动检查与部署版本核对
+
+普通用户不需要手动检查会话，也不依赖 AI agent 常驻。商品中心 service 在页面初始化或采集前调用 session_status；正常且 fresh 时直接复用。需要检查且没有 requires_attention 时，调用 check_session(force=False)，仅在返回 operation_id 时轮询。需要人工验证或登录时再提示本人处理。已记录异常时不自动循环打开浏览器；用户明确强制检查才传 force=True。页面刷新仅查状态。
+
+正常缓存为 43200 秒。异常结果的六十秒 fresh 新鲜度不是正常会话有效期；requires_attention=true 时普通检查仍返回已知异常，不因 fresh=false 自动重开浏览器。不得根据旧版六十秒逻辑解释当前部署。
+
+站点配置示例见 login_deploy/sites.example.json，包含已验证的新旧 1688 登录标志和十二小时授权 TTL。它不含任何账号、Cookie 或服务密钥，不能用示例文件覆盖当前私有配置和授权；升级现有部署只合并需要的规则和 TTL。
+
+对已有验收通过的原生浏览器镜像，可使用 login_deploy/Dockerfile.update 覆盖共享代码；分别以当前登录镜像和商品执行器镜像为 CRAWLER_BASE_IMAGE，传入完整 REVISION，使用两个不同的输出标签。该更新镜像保留基底原生 Chrome、中文输入、实际服务 CMD 及现有中文登录页面，不将基础 Playwright 镜像冒充正式原生环境。镜像通过 org.opencontainers.image.revision 标签标识对应提交。
+
+升级时保留当前镜像标签和私有配置回滚副本，确认无正在执行的采集、无正在操作的人工窗口，再更新两个组件。session-health、授权、浏览器 profile 和结果卷必须保留。私有配置中 ttl_seconds 应为 43200；健康目录必须由 UID 10001 可读写，商品执行器授权目录继续只读。更新后核对两个镜像的 revision、共享代码摘要、普通检查是否 cached=true 且 operation_id=null。已有正常授权无需因代码升级再强制访问平台。
+
+必要时实际检查才使用 force=true；验证码和登录失效仍须按平台要求处理。容器重建后如残留 Singleton 锁，应先证明旧容器和对应 Chrome 进程不存在、socket 已失效，再备份并仅清理锁链接，不能删除 profile 或 Cookie，也不能把真实占用当作过期锁清理。

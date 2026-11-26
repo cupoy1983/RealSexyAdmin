@@ -17,6 +17,7 @@ from .auth_session import AuthSessionStore
 from .access_signals import inspect_access
 from .login_access import ENTRY_HTML, LoginAccess
 from .state import write_private_json
+from .session_health import SessionHealth
 
 DEVICE = "chromium-desktop-zh-CN-v1"
 
@@ -29,6 +30,29 @@ class LoginManager:
         self.active = None
         self.events = []
         self.message = "请选择平台并开始登录"
+        self.session_health = SessionHealth(os.environ.get('COLLECTOR_SESSION_HEALTH_DIR', self.directory.parent / 'session-health'))
+
+    def cached_check(self, platform, account):
+        store = self.store(platform, account)
+        record = store.load_record()
+        if not record:
+            return None
+        metadata = record[1]
+        observation = self.session_health.read(store.scope, metadata['version'])
+        if observation:
+            return {key: observation[key] for key in ('state', 'reason')}
+        verified = metadata.get('verified_at')
+        if type(verified) in (int, float) and 0 <= time.time() - verified < 43200:
+            return {'state': 'valid', 'reason': 'verified'}
+        return None
+
+    def observed_check(self, platform, account, result):
+        if result['state'] != 'valid' and result['reason'] not in {'window_busy', 'manual_login'}:
+            store = self.store(platform, account)
+            record = store.load_record()
+            if record:
+                self.session_health.report(store.scope, record[1]['version'], result['state'], result['reason'])
+        return result
 
     def store(self, platform, account):
         if platform not in self.sites or not re.fullmatch(r"[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]{1,48}", account):
@@ -36,7 +60,7 @@ class LoginManager:
         site = self.sites[platform]
         return AuthSessionStore(self.directory / platform / (account + ".json"),
                                 scope=f"{platform}:{account}:{DEVICE}", allowed_domains=set(site["domains"]),
-                                ttl_seconds=site.get("ttl_seconds", 21600))
+                                ttl_seconds=site.get("ttl_seconds", 43200))
 
     def status(self):
         sessions = {}
@@ -79,18 +103,23 @@ class LoginManager:
         context.on("requestfailed", failed)
         context.on("response", response)
 
-    async def classify(self, context, platform, *, reveal=False):
+    async def classify(self, context, platform, *, reveal=False, target_page=None):
         site = self.sites[platform]
-        for page in context.pages:
+        for page in ([target_page] if target_page is not None else context.pages):
             target = urlsplit(page.url)
             if target.scheme != "https" or target.hostname not in site["domains"]:
                 continue
             signal = await inspect_access(page, site=site)
+            if signal['state'] == 'unknown' and signal['reason'] != 'unrecognized_page':
+                return {k: signal[k] for k in ('state', 'reason')}
             if signal['state'] in {'verification_required', 'login_required', 'network_error'}:
                 return {k: signal[k] for k in ('state', 'reason')}
             if signal['state'] == 'access_denied':
                 return {'state': 'unknown', 'reason': signal['reason']}
             if target.hostname in site["success_hosts"]:
+                for selector in site["success_selectors"]:
+                    if await page.locator(selector).first.is_visible():
+                        return {"state": "valid", "reason": "verified"}
                 if reveal:
                     for selector in site.get("success_hover_selectors", []):
                         try:
@@ -105,13 +134,17 @@ class LoginManager:
                 return {"state": "login_required", "reason": "login_redirect"}
         return {"state": "unknown", "reason": "unrecognized_page"}
 
-    async def check(self, platform, account):
+    async def check(self, platform, account, *, force=False):
         async with self.lock:
+            if not force and not self.active:
+                cached = self.cached_check(platform, account)
+                if cached:
+                    return cached
             store = self.store(platform, account)
             if self.active:
                 if (self.active["platform"], self.active["account"]) != (platform, account):
                     return {"state": "unknown", "reason": "window_busy"}
-                return await self.classify(self.context, platform)
+                return self.observed_check(platform, account, await self.classify(self.context, platform))
             saved = store.load()
             if not saved:
                 return {"state": "not_logged_in", "reason": "no_saved_state"}
@@ -132,7 +165,10 @@ class LoginManager:
                         await context.route("**/*", route)
                         page = await context.new_page()
                         await page.goto(site.get("check_url", site["url"]), wait_until="domcontentloaded", timeout=30000)
-                        return await self.classify(context, platform, reveal=True)
+                        result = await self.classify(context, platform, reveal=True, target_page=page)
+                        if result['state'] == 'valid':
+                            store.save_verified(await context.storage_state(indexed_db=True))
+                        return self.observed_check(platform, account, result)
                     finally:
                         await browser.close()
             except Exception:

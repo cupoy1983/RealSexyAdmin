@@ -36,4 +36,5 @@ class JobError(Exception):
 
 TERMINAL = {"succeeded", "failed", "needs_login", "needs_verification"}
 REASONS = {"session_missing", "login_required", "challenge", "access_denied", "network_error", "navigation_denied",
-           "identity_mismatch", "unsupported_page", "timeout", "process_interrupted", "internal_error"}
+           "identity_mismatch", "unsupported_page", "timeout", "process_interrupted", "internal_error",
+           "page_changing", "session_check_failed"}

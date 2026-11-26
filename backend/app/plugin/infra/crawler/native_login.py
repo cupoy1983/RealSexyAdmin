@@ -2,12 +2,15 @@
 
 import asyncio
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 from uuid import uuid4
 
 from .login_service import LoginManager
+from .diagnostics import capture_diagnostic
+from .state import write_private_json
 
 
 class NativeLoginManager(LoginManager):
@@ -78,8 +81,12 @@ class NativeLoginManager(LoginManager):
                     native.kill()
                     await asyncio.to_thread(native.wait)
 
-    async def check(self, platform, account):
+    async def check(self, platform, account, *, force=False):
         async with self.lock:
+            if not force and not self.active:
+                cached = self.cached_check(platform, account)
+                if cached:
+                    return cached
             store = self.store(platform, account)
             if self.active:
                 if (self.active["platform"], self.active["account"]) != (platform, account):
@@ -88,19 +95,37 @@ class NativeLoginManager(LoginManager):
                 if result["state"] == "valid":
                     # A manually logged-in profile is not an exported business session yet.
                     return {"state": "login_required", "reason": "manual_login"}
-                return result
+                return self.observed_check(platform, account, result)
             if not store.load():
                 return {"state": "not_logged_in", "reason": "no_saved_state"}
+            stage, page = 'browser_start', None
             try:
                 await self.start_native(platform, account)
                 # Restored startup tabs can close while Chrome finishes session recovery.
                 # This check owns its page instead of racing a restored target.
                 page = await self.context.new_page()
                 site = self.sites[platform]
+                stage = 'navigation'
                 await page.goto(site.get("check_url") or site["url"], wait_until="domcontentloaded", timeout=30000)
-                return await self.classify(self.context, platform, reveal=True)
-            except Exception:
-                return {"state": "network_error", "reason": "network_failed"}
+                stage = 'recognition'
+                result = await self.classify(self.context, platform, reveal=True, target_page=page)
+                if result['state'] == 'valid':
+                    stage = 'save_state'
+                    store.save_verified(await self.context.storage_state(indexed_db=True))
+                return self.observed_check(platform, account, result)
+            except Exception as error:
+                reason = 'network_failed' if stage == 'navigation' else ('browser_start_failed' if stage == 'browser_start' else 'check_failed')
+                code = re.search(r'net::ERR_[A-Z0-9_]+', str(error))
+                try:
+                    root = self.directory.parent / 'private' / 'session-checks'
+                    reference = await asyncio.wait_for(capture_diagnostic(page, root, reason), timeout=4)
+                    write_private_json(root / (uuid4().hex + '.json'), {
+                        'platform': platform, 'stage': stage, 'error_type': type(error).__name__,
+                        'network_code': code.group(0) if code else None, 'diagnostic_id': reference, 'observed_at': time.time()})
+                except Exception:
+                    pass
+                return self.observed_check(platform, account, {
+                    "state": "network_error" if stage == 'navigation' else 'unknown', "reason": reason})
             finally:
                 await self.close()
 

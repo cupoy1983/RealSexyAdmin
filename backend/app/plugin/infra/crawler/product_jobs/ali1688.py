@@ -1,4 +1,5 @@
 import asyncio
+import os
 import ipaddress
 import json
 import re
@@ -13,6 +14,7 @@ from ..access_signals import inspect_access, classify_access
 from ..engine import BrowserJobOptions, run_browser_job
 from ..login_service import DEVICE
 from ..diagnostics import capture_diagnostic
+from ..session_health import SessionHealth
 
 EXTRACT = Path(__file__).with_name('extract_1688.js').read_text(encoding='utf-8')
 DOMAINS = {'1688.com', 'alibaba.com', 'alicdn.com', 'taobao.com', 'tbcdn.cn', 'alipay.com', 'aliyuncs.com', 'mmstat.com'}
@@ -92,9 +94,34 @@ async def collect(request, job_id, *, auth_dir, config_path, diagnostics_dir, ex
     site=sites['1688']
     store=AuthSessionStore(Path(auth_dir)/'1688'/(request['session_name']+'.json'),
                            scope=f"1688:{request['session_name']}:{DEVICE}",allowed_domains=set(site['domains']))
-    state=store.load(discard_expired=False)
-    if not state:
+    record=store.load_record(discard_expired=False)
+    if not record:
         raise CollectionFailure('needs_login','session_missing')
+    state, metadata = record
+    health = SessionHealth(os.environ.get('COLLECTOR_SESSION_HEALTH_DIR', str(Path(auth_dir).parent / 'session-health')))
+    observation = health.read(store.scope, metadata['version'])
+    if observation:
+        failure_state = {'not_logged_in': 'needs_login', 'login_required': 'needs_login', 'verification_required': 'needs_verification',
+                         'access_denied': 'needs_verification'}.get(observation['state'], 'failed')
+        reason = {'not_logged_in': 'session_missing', 'login_required': 'login_required',
+                  'verification_required': 'challenge', 'access_denied': 'access_denied',
+                  'network_error': 'network_error'}.get(observation['state'], 'session_check_failed')
+        if observation['reason'] == 'page_changing':
+            reason = 'page_changing'
+        raise CollectionFailure(failure_state, reason)
+
+    def report_failure(error):
+        observed = None
+        if error.state == 'needs_login':
+            observed = 'login_required'
+        elif error.state == 'needs_verification':
+            observed = 'access_denied' if error.reason == 'access_denied' else 'verification_required'
+        elif error.reason in {'network_error', 'timeout', 'collection_interrupted'}:
+            observed = 'network_error'
+        elif error.reason == 'page_changing':
+            observed = 'unknown'
+        if observed:
+            health.report(store.scope, metadata['version'], observed, error.reason)
     cache={}
     async def allowed(host):
         if not host or not any(host==d or host.endswith('.'+d) for d in DOMAINS):return False
@@ -128,6 +155,8 @@ async def collect(request, job_id, *, auth_dir, config_path, diagnostics_dir, ex
         except Exception:pass
         body=(await page.locator('body').inner_text())[:5000]
         signal = await inspect_access(page, site={**site, 'challenge_selectors': list(dict.fromkeys([*site.get('challenge_selectors', []), '.nc-container,#baxia-dialog-content,#nocaptcha']))}, status=status, include_password=True)
+        if signal['reason'] == 'page_changing':
+            raise CollectionFailure('failed', 'page_changing', await capture(page, diagnostics_dir, 'page_changing'))
         if signal['state'] in {'verification_required', 'access_denied'}:
             reason = 'challenge' if signal['state'] == 'verification_required' else 'access_denied'
             gate.cooldown(300, reason)
@@ -150,8 +179,14 @@ async def collect(request, job_id, *, auth_dir, config_path, diagnostics_dir, ex
             gate.cooldown(300,'access_denied')
             return CollectionFailure('needs_verification','access_denied',await capture(getattr(context,'page',None),diagnostics_dir,'access_denied'))
         return CollectionFailure('failed','network_error',await capture(getattr(context,'page',None),diagnostics_dir,'network_error'))
-    result=await run_browser_job(request['url'],handle,prepare=prepare,on_error=on_error,
-        options=BrowserJobOptions(executable=executable,locale='zh-CN',viewport={'width':1280,'height':720},
-            storage_state=state,launch_args=('--no-sandbox',),navigation_timeout_seconds=60,handler_timeout_seconds=90))
-    if isinstance(result,CollectionFailure):raise result
+    try:
+        result=await run_browser_job(request['url'],handle,prepare=prepare,on_error=on_error,
+            options=BrowserJobOptions(executable=executable,locale='zh-CN',viewport={'width':1280,'height':720},
+                storage_state=state,launch_args=('--no-sandbox',),navigation_timeout_seconds=60,handler_timeout_seconds=90))
+    except asyncio.CancelledError:
+        report_failure(CollectionFailure('failed', 'collection_interrupted'))
+        raise
+    if isinstance(result,CollectionFailure):
+        report_failure(result)
+        raise result
     return result

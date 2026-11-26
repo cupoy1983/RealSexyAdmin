@@ -1,0 +1,10 @@
+# Update code on an already validated native-browser runtime; preserve its CMD and Chinese UI.
+ARG CRAWLER_BASE_IMAGE
+FROM ${CRAWLER_BASE_IMAGE}
+ARG REVISION
+LABEL org.opencontainers.image.revision="${REVISION}"
+LABEL org.opencontainers.image.source="https://github.com/cupoy1983/RealSexyAdmin"
+USER 0:0
+RUN mkdir -p /session-health && chown 10001:10001 /session-health && chmod 700 /session-health
+COPY --chown=10001:10001 backend/app/plugin/infra/crawler/ /opt/login/app/plugin/infra/crawler/
+USER 10001:10001

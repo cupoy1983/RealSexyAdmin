@@ -1,4 +1,5 @@
 """Observed access signals, not guesses about account validity or root cause."""
+import asyncio
 from urllib.parse import urlsplit
 from pathlib import Path
 
@@ -23,15 +24,29 @@ async def inspect_access(page, *, site, status=None, include_password=False):
     host = urlsplit(url).hostname
     if host not in site.get('domains', []):
         return {'state': 'unknown', 'reason': 'unexpected_host', 'evidence': ['unexpected_host']}
-    challenge = failed = False
-    for frame in page.frames:
-        for selector in site.get('challenge_selectors', []):
-            group = frame.locator(selector)
-            locators = [group.first] if await group.first.is_visible() else (await group.all())[:20]
-            for locator in locators:
-                if await locator.is_visible():
-                    challenge = True
-                    failed = failed or await frame.get_by_text('验证失败', exact=False).first.is_visible()
+    for attempt in range(2):
+        challenge = failed = changing = False
+        for frame in page.frames:
+            try:
+                for selector in site.get('challenge_selectors', []):
+                    group = frame.locator(selector)
+                    locators = [group.first] if await group.first.is_visible() else (await group.all())[:20]
+                    for locator in locators:
+                        if await locator.is_visible():
+                            challenge = True
+                            failed = failed or await frame.get_by_text('验证失败', exact=False).first.is_visible()
+            except Exception:
+                # Frame lists are snapshots: an iframe may disappear during a DOM read.
+                # Never suppress an actual page/browser closure or an attached-frame error.
+                await asyncio.sleep(0)
+                if frame is not page.main_frame and frame.is_detached() and not page.is_closed():
+                    changing = True
+                    break
+                raise
+        if not changing:
+            break
+        if attempt == 1:
+            return {'state': 'unknown', 'reason': 'page_changing', 'evidence': ['detached_frame']}
     body = await page.locator('body').inner_text()
     body = body[:5000] if isinstance(body, str) else ''
     challenge = challenge or any(text in body for text in ['请拖动下方滑块', '请完成安全验证', '验证失败，请点击'])

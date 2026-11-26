@@ -1,0 +1,68 @@
+{
+  "1688": {
+    "name": "1688",
+    "url": "https://www.1688.com/",
+    "check_url": "https://www.1688.com/",
+    "domains": [
+      "1688.com",
+      "www.1688.com",
+      "login.1688.com",
+      "detail.1688.com",
+      "work.1688.com",
+      "m.1688.com",
+      "taobao.com",
+      "www.taobao.com",
+      "login.taobao.com",
+      "passport.1688.com"
+    ],
+    "success_hosts": [
+      "www.1688.com",
+      "work.1688.com"
+    ],
+    "success_selectors": [
+      "a[href*='login.1688.com/member/logout']",
+      "a[href*='login.1688.com/member/signout']",
+      "span[class*='_userActionLabel_']:has-text('退出')",
+      "a[class*=\"userName--\"][href*=\"work.1688.com/home/page/index.htm\"]:not(:empty)"
+    ],
+    "success_hover_selectors": [
+      "div[class*='_avatarLogo_']"
+    ],
+    "login_hosts": [
+      "login.1688.com",
+      "login.taobao.com",
+      "passport.1688.com"
+    ],
+    "challenge_selectors": [
+      "#nc_1_wrapper",
+      ".nc-container",
+      "#baxia-dialog-content"
+    ],
+    "ttl_seconds": 43200
+  },
+  "amazon": {
+    "name": "Amazon US",
+    "url": "https://www.amazon.com/",
+    "check_url": "https://www.amazon.com/",
+    "domains": [
+      "amazon.com",
+      "www.amazon.com"
+    ],
+    "success_hosts": [
+      "www.amazon.com"
+    ],
+    "success_selectors": [
+      "#nav-item-signout",
+      "a[href*=\"/gp/flex/sign-out\"]"
+    ],
+    "success_hover_selectors": [
+      "#nav-link-accountList"
+    ],
+    "login_hosts": [],
+    "challenge_selectors": [
+      "#captchacharacters",
+      "form[action*=\"validateCaptcha\"]"
+    ],
+    "ttl_seconds": 43200
+  }
+}

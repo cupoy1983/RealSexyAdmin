@@ -153,3 +153,30 @@ async def test_crawlee_failure_callback_returns_sentinel_instead_of_raising(tmp_
         await ali1688.collect(REQUEST,'fixture',auth_dir=auth,config_path=config,diagnostics_dir=tmp_path/'diagnostics',
                               executable='/fixture',gate=SimpleNamespace())
     assert error.value.state=='needs_verification' and error.value.diagnostic=='a'*32
+    from app.plugin.infra.crawler.session_health import SessionHealth
+    current = AuthSessionStore(auth/'1688/default.json', scope=f'1688:default:{DEVICE}', allowed_domains={'1688.com'})
+    observation = SessionHealth(tmp_path/'session-health').read(current.scope, current.load_record()[1]['version'])
+    assert observation['state'] == 'verification_required' and observation['reason'] == 'challenge'
+
+
+@pytest.mark.parametrize('state,reason,expected', [
+    ('unknown', 'check_failed', 'session_check_failed'),
+    ('network_error', 'network_failed', 'network_error'),
+    ('unknown', 'page_changing', 'page_changing'),
+])
+async def test_session_health_reasons_remain_valid_product_job_results(tmp_path, monkeypatch, state, reason, expected):
+    from app.plugin.infra.crawler.product_jobs import ali1688
+    from app.plugin.infra.crawler.auth_session import AuthSessionStore
+    from app.plugin.infra.crawler.login_service import DEVICE
+    from app.plugin.infra.crawler.session_health import SessionHealth
+    from app.plugin.infra.crawler.product_jobs.schema import REASONS
+    auth = tmp_path/'auth'
+    session = AuthSessionStore(auth/'1688/default.json', scope=f'1688:default:{DEVICE}', allowed_domains={'1688.com'})
+    session.save_verified({'cookies': [{'name': 'fixture', 'value': 'fixture', 'domain': '1688.com'}], 'origins': []})
+    SessionHealth(tmp_path/'session-health').report(session.scope, session.load_record()[1]['version'], state, reason)
+    config=tmp_path/'sites.json'
+    config.write_text(json.dumps({'1688': {'domains': ['1688.com']}}))
+    with pytest.raises(CollectionFailure) as failure:
+        await ali1688.collect(REQUEST, 'fixture', auth_dir=auth, config_path=config,
+                              diagnostics_dir=tmp_path/'diagnostics', executable='/fixture', gate=None)
+    assert failure.value.reason == expected and expected in REASONS

@@ -1,0 +1,14 @@
+# Load after both browser-login and product-jobs service definitions.
+services:
+  browser-login:
+    environment:
+      COLLECTOR_SESSION_HEALTH_DIR: /session-health
+    volumes:
+      - session-health:/session-health
+  product-jobs:
+    environment:
+      COLLECTOR_SESSION_HEALTH_DIR: /session-health
+    volumes:
+      - session-health:/session-health
+volumes:
+  session-health:

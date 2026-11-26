@@ -15,7 +15,7 @@ from app.plugin.infra.crawler.session_api import SessionAPI, SessionAPIError
 class FixtureManager(LoginManager):
     calls = 0
 
-    async def check(self, platform, account):
+    async def check(self, platform, account, *, force=False):
         self.calls += 1
         return {'state': 'valid', 'reason': 'verified'}
 
@@ -31,8 +31,8 @@ async def test_state_cache_invalidation_and_owned_one_time_entry(tmp_path):
     body = {'platform': '1688', 'session_name': '采购账号'}
     assert (await api.dispatch('a', 'POST', '/v1/sessions/status', body))[1]['state'] == 'not_logged_in'
     manager.store('1688', '采购账号').save_verified({'cookies': [{'name': 'fixture', 'value': 'private', 'domain': 'fixture.invalid'}]})
-    assert api.status('1688', '采购账号')['state'] == 'unknown'
-    code, job = await api.dispatch('a', 'POST', '/v1/sessions/check', body)
+    assert api.status('1688', '采购账号')['state'] == 'valid'
+    code, job = await api.dispatch('a', 'POST', '/v1/sessions/check', {**body, 'force': True})
     assert code == 202
     await asyncio.gather(*api.tasks)
     assert api.status('1688', '采购账号')['state'] == 'valid'

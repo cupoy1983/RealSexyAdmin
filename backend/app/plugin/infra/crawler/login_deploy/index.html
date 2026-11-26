@@ -4,7 +4,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>采集专用浏览器登录</title>
 <style>
-body{margin:20px;background:#111827;color:#e5e7eb;font:16px system-ui}button,input,select{font:inherit;padding:8px;margin:4px;border-radius:6px}button{cursor:pointer}iframe{width:100%;height:76vh;border:1px solid #4b5563}p{line-height:1.6}#message{min-height:26px}.required{color:#f87171}.login-controls{display:flex;align-items:center;flex-wrap:wrap;gap:4px}.session-picker{display:inline-block;position:relative}#session-menu{position:absolute;left:0;top:100%;z-index:10;min-width:240px;background:#1f2937;border:1px solid #6b7280;border-radius:6px;padding:4px}#session-menu button{display:block;width:100%;margin:0;text-align:left;background:transparent;color:inherit;border:0}#session-menu button:hover,#session-menu button:focus{background:#374151}
+body{margin:20px;background:#111827;color:#e5e7eb;font:16px system-ui}button,input,select{font:inherit;padding:8px;margin:4px;border-radius:6px}button{cursor:pointer}iframe{width:100%;height:76vh;border:1px solid #4b5563}p{line-height:1.6}#message{min-height:26px}#account[readonly]{color:#111827;background:#f3f4f6;opacity:1;-webkit-text-fill-color:#111827}.required{color:#f87171}.login-controls{display:flex;align-items:center;flex-wrap:wrap;gap:4px}.session-picker{display:inline-block;position:relative}#session-menu{position:absolute;left:0;top:100%;z-index:10;min-width:240px;background:#1f2937;border:1px solid #6b7280;border-radius:6px;padding:4px}#session-menu button{display:block;width:100%;margin:0;text-align:left;background:transparent;color:inherit;border:0}#session-menu button:hover,#session-menu button:focus{background:#374151}
 </style>
 <h2>采集专用浏览器登录</h2>
 <p>请在下方的 Collector 浏览器中自行登录。会话名用于区分保存的账号，不需要填写真实账号。登录窗口最多保留 15 分钟。</p>
@@ -22,7 +22,7 @@ let savedSessions={};
 function defaultSession(){return 'default-'+platform.value}
 function closeSessions(){sessionMenu.hidden=true;account.setAttribute('aria-expanded','false')}
 function showSessions(){
-  if(account.disabled){closeSessions();return}
+  if(account.readOnly){closeSessions();return}
   const names=savedSessions[platform.value]||[];sessionMenu.replaceChildren();
   for(const name of [...new Set([defaultSession(),...names])]){const option=document.createElement('button');option.type='button';option.role='option';option.textContent=name;option.onmousedown=e=>e.preventDefault();option.onclick=()=>{account.value=name;closeSessions();account.focus()};sessionMenu.append(option)}
   sessionMenu.hidden=false;account.setAttribute('aria-expanded','true');
@@ -35,8 +35,13 @@ let loaded=false;
 function render(state){
   savedSessions=state.sessions||{};
   if(!loaded){for(const site of state.platforms){const o=document.createElement('option');o.value=site.id;o.textContent=site.name.replace(/[（(].*$/, '').trim();platform.append(o)}loaded=true;account.value=defaultSession()}
-  if(state.active){platform.value=state.active.platform;account.value=state.active.account}
-  platform.disabled=account.disabled=!!state.active;
+  if(state.active){
+    platform.value=state.active.platform;
+    if(typeof state.active.account==='string'&&state.active.account.trim())account.value=state.active.account;
+  }
+  platform.disabled=!!state.active;
+  account.disabled=false;account.readOnly=!!state.active;
+  account.setAttribute('aria-readonly',String(!!state.active));
   if(state.active)closeSessions();
   message.textContent=state.message;
 }
