@@ -5,20 +5,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
-class JobRequest(BaseModel):
+class ProductReference(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     platform: str = Field(pattern=r"^1688$")
     url: str = Field(max_length=2048)
-    session_name: str = Field(pattern=r"^[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]{1,48}$")
-    save_mode: Literal['overwrite', 'history'] = 'overwrite'
-
-    @field_validator('session_name', mode='before')
-    @classmethod
-    def validate_session_name(cls, value):
-        if not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]{1,48}', value):
-            raise ValueError('会话名格式无效')
-        return value
-
     @model_validator(mode="after")
     def canonical_url(self):
         target = urlsplit(self.url)
@@ -28,6 +18,18 @@ class JobRequest(BaseModel):
             raise ValueError("仅接受 1688 HTTPS 商品详情链接")
         self.url = f"https://detail.1688.com/offer/{match[1]}.html"
         return self
+
+
+class JobRequest(ProductReference):
+    session_name: str = Field(pattern=r"^[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]{1,48}$")
+    save_mode: Literal['overwrite', 'history'] = 'overwrite'
+
+    @field_validator('session_name', mode='before')
+    @classmethod
+    def validate_session_name(cls, value):
+        if not isinstance(value, str) or not re.fullmatch(r'[a-zA-Z0-9_\u3400-\u4dbf\u4e00-\u9fff-]{1,48}', value):
+            raise ValueError('会话名格式无效')
+        return value
 
 
 class JobError(Exception):

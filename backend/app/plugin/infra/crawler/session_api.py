@@ -20,6 +20,7 @@ class SessionAPIError(Exception):
 class SessionAPI:
     def __init__(self, manager, access, *, clock=time.time):
         self.manager, self.access, self.clock = manager, access, clock
+        manager.access = access
         self.cache, self.operations = {}, {}
         self.tasks = set()
         self.busy = False
@@ -131,19 +132,25 @@ class SessionAPI:
                                                    'fingerprint': self.fingerprint(platform, name)}
                     operation['result'] = self.status(platform, name)
                 else:
+                    if self.manager.closing:
+                        raise SessionAPIError(409, 'window_busy')
                     if not self.manager.active:
                         await self.manager.command('start', platform, name)
-                    active = self.manager.active
-                    if not active or (active['platform'], active['account']) != (platform, name):
-                        raise SessionAPIError(409, 'window_busy')
-                    operation['ticket'] = ticket(self.access.key)
-                    operation['entry_deadline'] = int(operation['ticket'].split('.')[0])
+                    async with self.manager.lock:
+                        active = self.manager.active
+                        if self.manager.closing or not active or (active['platform'], active['account']) != (platform, name):
+                            raise SessionAPIError(409, 'window_busy')
+                        self.access.begin_window(active)
+                        operation['ticket'] = ticket(self.access.key)
+                        operation['entry_deadline'] = int(operation['ticket'].split('.')[0])
                 operation['state'] = 'completed'
         except asyncio.CancelledError:
             operation.update(state='failed', reason='process_interrupted')
             raise
         except TimeoutError:
             operation.update(state='failed', reason='timeout')
+        except SessionAPIError as error:
+            operation.update(state='failed', reason=error.reason)
         except Exception:
             operation.update(state='failed', reason='operation_failed')
         finally:

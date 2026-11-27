@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
-from .schema import JobError, JobRequest
+from .schema import JobError, JobRequest, ProductReference
 
 
 def authenticate(path, header):
@@ -46,7 +46,16 @@ def handler(store, registry):
                     return self.reply(200, {"protocol_version": 1, "result_version": 1, "platforms": ["1688"],
                                             "states": ["queued","running","succeeded","failed","needs_login","needs_verification"],
                                             "max_running": 1, "idempotency_retention_seconds": store.retention,
-                                            "save_modes": ["overwrite", "history"], "default_save_mode": "overwrite"})
+                                            "save_modes": ["overwrite", "history"], "default_save_mode": "overwrite",
+                                            "current_product_lookup": True, "product_results_shared_across_sessions": True})
+                if self.command == 'POST' and target.path == '/v1/products/current':
+                    if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+                        raise JobError(422, 'invalid_request')
+                    size = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < size <= 8192:
+                        raise JobError(422, 'invalid_request')
+                    reference = ProductReference.model_validate_json(self.rfile.read(size)).model_dump(mode='json')
+                    return self.reply(200, store.current_product(owner, reference))
                 if self.command == "POST" and target.path == "/v1/jobs":
                     if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
                         raise JobError(422, "invalid_request")

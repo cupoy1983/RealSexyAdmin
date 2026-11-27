@@ -24,3 +24,16 @@ async def test_backend_sdk_uses_relative_paths_service_auth_and_idempotency(tmp_
 
 def test_backend_sdk_refuses_unencrypted_remote_api():
     with pytest.raises(ValueError):ProductJobsClient('http://collector.invalid/collector/v1','fixture')
+
+
+async def test_current_product_sdk_reads_without_a_login_session():
+    from app.plugin.infra.crawler.collector_client import CollectorClient
+    calls = []
+    def route(request):
+        calls.append(request)
+        return httpx.Response(200, json={'code': 0, 'data': {'job': {'session_name': 'actual-source'}, 'result': {'title': 'shared'}}})
+    async with CollectorClient('http://127.0.0.1/collector/v1', 'fixture', transport=httpx.MockTransport(route)) as client:
+        current = await client.current_product(platform='1688', url='https://detail.1688.com/offer/123.html')
+    assert current['job']['session_name'] == 'actual-source'
+    assert calls[0].url.path == '/collector/v1/products/current'
+    assert json.loads(calls[0].content) == {'platform': '1688', 'url': 'https://detail.1688.com/offer/123.html'}

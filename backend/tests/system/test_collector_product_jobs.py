@@ -105,6 +105,25 @@ async def test_real_http_to_runner_and_result(api,store):
     assert api('GET','jobs/'+identifier+'/result')[1]['data']['title']=='Fixture product'
 
 
+def test_current_product_api_needs_no_login_or_new_job(api, store):
+    reference = {key: REQUEST[key] for key in ('platform', 'url')}
+    assert api('POST', 'products/current', reference)[0] == 404
+    identifier = api('POST', 'jobs', {**REQUEST, 'session_name': 'actual-source'})[1]['data']['job_id']
+    store.claim()
+    store.finish(identifier, 'succeeded', result={'title': 'shared product'})
+    response, body = api('POST', 'products/current', {**reference, 'url': 'https://m.1688.com/offer/123456789.html?tracking=fixture'})
+    assert response == 200
+    assert body['data']['job']['session_name'] == 'actual-source'
+    assert body['data']['result']['title'] == 'shared product'
+    assert api('POST', 'products/current', reference, key=KEY_B)[0] == 404
+    assert api('POST', 'products/current', reference, key='')[0] == 401
+    assert api('POST', 'products/current', {**reference, 'session_name': 'not-needed'})[0] == 422
+    assert api('POST', 'products/current', {**reference, 'url': 'https://127.0.0.1/private'})[0] == 422
+    assert store.claim() is None
+    with store.connection() as db:
+        assert db.execute('SELECT count(*) FROM jobs').fetchone()[0] == 1
+
+
 async def test_login_and_timeout_failures_are_terminal_without_fake_results(store):
     first,_=store.submit('product','login-key-001',REQUEST)
     async def missing(*args):raise CollectionFailure('needs_login','session_missing')

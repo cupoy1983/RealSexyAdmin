@@ -32,7 +32,36 @@ account.addEventListener('keydown',e=>{if(e.key==='Escape')closeSessions();if(e.
 document.addEventListener('click',e=>{if(!e.target.closest('.session-picker'))closeSessions()});
 platform.addEventListener('change',()=>{account.value=defaultSession();closeSessions()});
 let loaded=false;
+let collectorWindowFinished=false;
+let collectorShownWindow=null;
+let collectorStarting=false;
+let collectorWindowId=sessionStorage.getItem('collector_window_id');
+const collectorWindowHeaders=()=>({'X-Collector-Window':collectorWindowId||''});
+const collectorViewer=document.querySelector('iframe');
+const collectorViewerUrl=collectorViewer.getAttribute('src');
+function collectorEndWindow(){
+  collectorWindowFinished=true;collectorViewer.src='about:blank';
+  for(const b of document.querySelectorAll('button'))b.disabled=true;
+}
+function collectorSyncViewer(state){
+  const current=state.active?.window_id||null;
+  if(current&&current!==collectorWindowId){
+    if(!collectorStarting||collectorShownWindow){collectorEndWindow();return false}
+    collectorWindowId=current;sessionStorage.setItem('collector_window_id',current);
+  }
+  if(current!==collectorShownWindow||!current){
+    if(current){
+      const url=new URL(collectorViewerUrl,location.origin);
+      url.searchParams.set('path','viewer/websockify?window='+current);
+      collectorViewer.src=url.pathname+url.search;
+    }else collectorViewer.src='about:blank';
+    if(collectorShownWindow&&!current)collectorEndWindow();
+    collectorShownWindow=current;
+  }
+  return true;
+}
 function render(state){
+  if(!collectorSyncViewer(state))return;
   savedSessions=state.sessions||{};
   if(!loaded){for(const site of state.platforms){const o=document.createElement('option');o.value=site.id;o.textContent=site.name.replace(/[（(].*$/, '').trim();platform.append(o)}loaded=true;account.value=defaultSession()}
   if(state.active){
@@ -45,7 +74,7 @@ function render(state){
   if(state.active)closeSessions();
   message.textContent=state.message;
 }
-async function refresh(){try{const r=await fetch('/control/status',{cache:'no-store'});if(!r.ok)throw Error();render(await r.json())}catch{message.textContent='连接已中断，请检查 SSH 转发后刷新页面'}}
+async function refresh(){if(collectorWindowFinished||collectorStarting)return;const collectorRefreshWindow=collectorWindowId;try{const r=await fetch('/control/status',{cache:'no-store',headers:collectorWindowHeaders()});if(collectorStarting||collectorRefreshWindow!==collectorWindowId)return;if(r.status===401){collectorEndWindow();message.textContent='窗口授权已结束，请从业务页面重新打开入口';return}if(!r.ok)throw Error();render(await r.json())}catch{message.textContent='连接已中断，请检查 SSH 转发后刷新页面'}}
 for(const button of document.querySelectorAll('button[data-action]'))button.onclick=async()=>{
   if(['start','confirm','revoke'].includes(button.dataset.action)){
     account.value=account.value.trim();
@@ -54,8 +83,9 @@ for(const button of document.querySelectorAll('button[data-action]'))button.oncl
   }
   if(button.dataset.action==='revoke'&&!confirm('撤销这个会话名的采集授权？平台端已登录设备不会自动退出。'))return;
   for(const b of document.querySelectorAll('button'))b.disabled=true;
-  try{const r=await fetch('/control/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:button.dataset.action,platform:platform.value,account:account.value})});const data=await r.json();if(!r.ok)throw Error(data.error);render(data)}catch(e){message.textContent=e.message}
-  finally{for(const b of document.querySelectorAll('button'))b.disabled=false}
+  collectorStarting=button.dataset.action==='start';
+  try{const r=await fetch('/control/command',{method:'POST',headers:{'Content-Type':'application/json',...collectorWindowHeaders()},body:JSON.stringify({action:button.dataset.action,platform:platform.value,account:account.value})});const data=await r.json();if(!r.ok)throw Error(data.error);render(data)}catch(e){message.textContent=e.message}
+  finally{collectorStarting=false;for(const b of document.querySelectorAll('button'))b.disabled=collectorWindowFinished}
 };
 refresh();setInterval(refresh,5000);
 </script>

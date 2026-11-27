@@ -49,6 +49,8 @@ class NativeLoginManager(LoginManager):
         raise RuntimeError("专用浏览器连接失败") from last
 
     async def start_native(self, platform, account):
+        if self.closing:
+            raise RuntimeError('登录窗口正在关闭')
         profile = self.profile(platform, account)
         executable = Path(os.environ.get("LOGIN_CHROME_EXECUTABLE", "/opt/google/chrome/chrome"))
         if not executable.is_file():
@@ -62,6 +64,8 @@ class NativeLoginManager(LoginManager):
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.active = {"platform": platform, "account": account,
                            "expires_at": time.time() + 900, "diagnostic_ref": uuid4().hex}
+            if self.access is not None:
+                self.access.begin_window(self.active)
             self.events = []
             await self.attach()
         except BaseException:
@@ -69,17 +73,21 @@ class NativeLoginManager(LoginManager):
             raise
 
     async def close(self):
+        self._closing_count += 1
+        native, self.native = self.native, None
         try:
             await super().close()
         finally:
-            native, self.native = self.native, None
-            if native is not None and native.poll() is None:
-                native.terminate()
-                try:
-                    await asyncio.to_thread(native.wait, timeout=5)
-                except subprocess.TimeoutExpired:
-                    native.kill()
-                    await asyncio.to_thread(native.wait)
+            try:
+                if native is not None and native.poll() is None:
+                    native.terminate()
+                    try:
+                        await asyncio.to_thread(native.wait, timeout=5)
+                    except subprocess.TimeoutExpired:
+                        native.kill()
+                        await asyncio.to_thread(native.wait)
+            finally:
+                self._closing_count -= 1
 
     async def check(self, platform, account, *, force=False):
         async with self.lock:
@@ -129,9 +137,13 @@ class NativeLoginManager(LoginManager):
             finally:
                 await self.close()
 
-    async def command(self, action, platform, account):
+    async def command(self, action, platform, account, *, authorize=None):
         if action == "start":
             async with self.lock:
+                if self.closing:
+                    raise ValueError('登录窗口正在关闭，请稍后重新申请入口')
+                if authorize is not None:
+                    authorize()
                 self.store(platform, account)
                 if self.active and self.active["expires_at"] <= time.time():
                     await self.close()
@@ -142,6 +154,10 @@ class NativeLoginManager(LoginManager):
                 return self.status()
         if action == "revoke":
             async with self.lock:
+                if self.closing:
+                    raise ValueError('登录窗口正在关闭，请稍后重新申请入口')
+                if authorize is not None:
+                    authorize()
                 store = self.store(platform, account)
                 if self.active and (self.active["platform"], self.active["account"]) == (platform, account):
                     await self.close()
@@ -153,4 +169,4 @@ class NativeLoginManager(LoginManager):
                     profile.rename(private / uuid4().hex)
                 self.message = "已撤销采集端授权并隔离旧 profile；平台设备退出请在平台操作"
                 return self.status()
-        return await super().command(action, platform, account)
+        return await super().command(action, platform, account, authorize=authorize)

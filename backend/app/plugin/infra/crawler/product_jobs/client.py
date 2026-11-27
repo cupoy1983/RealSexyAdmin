@@ -32,6 +32,9 @@ class ProductJobsClient:
 
     async def capabilities(self):return await self.request('GET','capabilities')
 
+    async def current_product(self, *, platform, url):
+        return await self.request('POST', 'products/current', json={'platform': platform, 'url': url})
+
     async def submit(self,*,platform,url,session_name,idempotency_key,save_mode='overwrite'):
         if save_mode not in {'overwrite', 'history'}:
             raise ValueError('采集保存模式无效')

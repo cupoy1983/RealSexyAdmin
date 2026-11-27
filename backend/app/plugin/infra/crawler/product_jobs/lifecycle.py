@@ -15,10 +15,11 @@ def present(value):
 def merge_result(old, new, observed):
     result = dict(new)
     times = dict(old.get('field_collected_at', {}))
+    observed_times = new.get('field_collected_at', {})
     sources = dict(new.get('field_sources', {}))
     for field in FIELDS:
         if present(new.get(field)):
-            times[field] = observed
+            times[field] = observed_times.get(field, observed)
         elif present(old.get(field)):
             result[field] = old[field]
             times[field] = times.get(field, old.get('collected_at'))
@@ -30,7 +31,7 @@ def merge_result(old, new, observed):
     for field in ('properties', 'variants'):
         key = 'sku.' + field
         if present(sku.get(field)):
-            times[key] = observed
+            times[key] = observed_times.get(key, observed)
         elif present((old.get('sku') or {}).get(field)):
             sku[field] = old['sku'][field]
             times[key] = times.get(key, old.get('collected_at'))
@@ -53,7 +54,7 @@ def merge_result(old, new, observed):
 
 def scope(row):
     request = json.loads(row['request'])
-    return (row['owner'], request['platform'], request['url'], request['session_name'])
+    return (row['owner'], request['platform'], request['url'])
 
 
 def enqueue(db, row):

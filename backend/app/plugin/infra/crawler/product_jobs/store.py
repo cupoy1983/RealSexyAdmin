@@ -19,19 +19,27 @@ class JobStore:
             raise ValueError("执行队列不能为符号链接")
         with self.connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
+            db.execute('BEGIN IMMEDIATE')
             db.execute("""CREATE TABLE IF NOT EXISTS jobs (
                 id TEXT PRIMARY KEY, owner TEXT NOT NULL, idem TEXT NOT NULL, fingerprint TEXT NOT NULL,
                 request TEXT NOT NULL, state TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL,
                 reason TEXT, diagnostic TEXT, result TEXT, UNIQUE(owner, idem))""")
             db.execute("CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(state,created,id)")
             db.execute('CREATE TABLE IF NOT EXISTS superseded_results (job_id TEXT PRIMARY KEY, replacement TEXT NOT NULL)')
-            existing = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='current_products'").fetchone()
             db.execute('CREATE TABLE IF NOT EXISTS current_products (scope TEXT PRIMARY KEY, job_id TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS artifact_cleanup (kind TEXT, identifier TEXT, PRIMARY KEY(kind,identifier))')
-            if not existing:
-                for row in db.execute("SELECT * FROM jobs WHERE state='succeeded' AND result IS NOT NULL ORDER BY rowid").fetchall():
+            db.execute('CREATE TABLE IF NOT EXISTS product_result_schema (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)')
+            version = db.execute('SELECT version FROM product_result_schema WHERE id=1').fetchone()
+            if version and version['version'] > 2:
+                raise ValueError('结果索引版本高于当前程序，不能降级启动')
+            if not version or version['version'] < 2:
+                db.execute('DELETE FROM current_products')
+                rows = db.execute("SELECT rowid AS sequence,* FROM jobs WHERE state='succeeded' AND result IS NOT NULL ORDER BY rowid").fetchall()
+                for row in rows:
                     if json.loads(row['request']).get('save_mode', 'overwrite') == 'overwrite':
-                        db.execute('INSERT OR REPLACE INTO current_products VALUES (?,?)', (json.dumps(scope(row), ensure_ascii=False), row['id']))
+                        result = publish(db, row, json.loads(row['result']))
+                        db.execute('UPDATE jobs SET result=? WHERE id=?', (json.dumps(result, ensure_ascii=False) if result is not None else None, row['id']))
+                db.execute('INSERT OR REPLACE INTO product_result_schema VALUES (1,2)')
         self.path.chmod(0o600)
 
     @contextmanager
@@ -67,14 +75,27 @@ class JobStore:
             row = db.execute("SELECT * FROM jobs WHERE id=?", (identifier,)).fetchone()
             return self.metadata(row), False
 
-    def metadata(self, row):
+    def metadata(self, row, *, db=None):
+        if db is None:
+            with self.connection() as connection:
+                return self.metadata(row, db=connection)
         request = json.loads(row["request"])
-        with self.connection() as db:
-            replacement = db.execute('SELECT replacement FROM superseded_results WHERE job_id=?', (row['id'],)).fetchone()
+        replacement = db.execute('SELECT replacement FROM superseded_results WHERE job_id=?', (row['id'],)).fetchone()
         return {"job_id": row["id"], **request, "state": row["state"], "created_at": row["created"],
                 "updated_at": row["updated"], "error_code": row["reason"], "diagnostic_id": row["diagnostic"],
                 "result_ready": row["state"] == "succeeded" and row['result'] is not None,
                 "superseded_by": replacement['replacement'] if replacement else None}
+
+    def current_product(self, owner, reference):
+        key = json.dumps((owner, reference['platform'], reference['url']), ensure_ascii=False)
+        with self.connection() as db:
+            db.execute('BEGIN')
+            row = db.execute('SELECT j.* FROM current_products c JOIN jobs j ON j.id=c.job_id WHERE c.scope=? AND j.owner=?', (key, owner)).fetchone()
+            if row is None or row['state'] != 'succeeded' or row['result'] is None:
+                raise JobError(404, 'product_not_found')
+            if scope(row) != (owner, reference['platform'], reference['url']):
+                raise JobError(404, 'product_not_found')
+            return {'job': self.metadata(row, db=db), 'result': json.loads(row['result'])}
 
     def get(self, owner, identifier, *, result=False):
         with self.connection() as db:

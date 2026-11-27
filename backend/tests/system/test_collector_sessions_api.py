@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 import httpx
@@ -20,7 +21,7 @@ class FixtureManager(LoginManager):
         return {'state': 'valid', 'reason': 'verified'}
 
     async def command(self, action, platform, account):
-        self.active = {'platform': platform, 'account': account}
+        self.active = {'platform': platform, 'account': account, 'expires_at': time.time() + 900}
 
 
 @pytest.mark.asyncio

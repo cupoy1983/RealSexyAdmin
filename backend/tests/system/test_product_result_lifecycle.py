@@ -42,8 +42,8 @@ def test_overwrite_replaces_payload_keeps_idempotency_and_cleans_files(tmp_path)
 
 def test_failure_and_late_success_cannot_replace_newer_result(tmp_path):
     store = JobStore(tmp_path / 'jobs.db')
-    older = task(store, 'older-task')
-    newer = task(store, 'newer-task')
+    older = task(store, 'older-task', session_name='first')
+    newer = task(store, 'newer-task', session_name='second')
     store.finish(newer, 'succeeded', result={'title': 'new'})
     store.finish(older, 'succeeded', result={'title': 'late-old'})
     assert store.get('product', newer, result=True)['title'] == 'new'
@@ -60,7 +60,7 @@ def test_history_scope_and_expiry_do_not_delete_current_data(tmp_path):
     store.finish(history, 'succeeded', result={'title': 'history'})
     old = task(store, 'old-task')
     store.finish(old, 'succeeded', result={'title': 'old'})
-    other = task(store, 'other-account', session_name='other')
+    other = task(store, 'other-product', url='https://detail.1688.com/offer/456.html')
     store.finish(other, 'succeeded', result={'title': 'other'})
     new = task(store, 'new-task')
     store.finish(new, 'succeeded', result={'title': 'new'})
@@ -136,3 +136,73 @@ def test_other_owner_and_failed_diagnostic_retention(tmp_path):
     assert not folder.exists()
     assert store.get('product', old, result=True)['title'] == 'product'
     assert store.get('other', other['job_id'], result=True)['title'] == 'other'
+
+
+def test_overwrite_and_current_product_are_shared_across_sessions(tmp_path):
+    store = JobStore(tmp_path / 'jobs.db')
+    first = task(store, 'account-first', session_name='first')
+    store.finish(first, 'succeeded', result={'title': 'first', 'images': ['fixture'], 'collected_at': 10})
+    second = task(store, 'account-second', session_name='second')
+    store.finish(second, 'succeeded', result={'title': 'second', 'images': [], 'collected_at': 20})
+    current = store.current_product('product', {'platform': '1688', 'url': REQUEST['url']})
+    assert current['job']['job_id'] == second
+    assert current['job']['session_name'] == 'second'
+    assert current['result']['images'] == ['fixture']
+    assert current['result']['field_collected_at']['images'] == 10
+    assert store.get('product', first)['superseded_by'] == second
+    with pytest.raises(JobError) as error:
+        store.get('product', first, result=True)
+    assert error.value.status == 410
+    failed = task(store, 'account-failure', session_name='third')
+    store.finish(failed, 'needs_login', reason='session_missing')
+    assert store.current_product('product', {'platform': '1688', 'url': REQUEST['url']})['job']['job_id'] == second
+    with pytest.raises(JobError) as error:
+        store.current_product('different-owner', {'platform': '1688', 'url': REQUEST['url']})
+    assert error.value.status == 404
+
+
+def legacy_session_scoped_database(path):
+    import sqlite3
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE jobs (id TEXT PRIMARY KEY, owner TEXT NOT NULL, idem TEXT NOT NULL, fingerprint TEXT NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, reason TEXT, diagnostic TEXT, result TEXT, UNIQUE(owner,idem))')
+        db.execute('CREATE TABLE current_products (scope TEXT PRIMARY KEY, job_id TEXT NOT NULL)')
+        for index, session in enumerate(('first', 'second'), 1):
+            identifier = str(index) * 32
+            request = {**REQUEST, 'session_name': session, 'save_mode': 'overwrite'}
+            result = {'title': session, 'images': ['first-image'] if index == 1 else [],
+                      'collected_at': index * 10, 'field_collected_at': {'images': 7} if index == 1 else {}}
+            db.execute("INSERT INTO jobs VALUES (?,?,?,?,?,'succeeded',?,?,NULL,NULL,?)",
+                       (identifier, 'product', session, 'fixture', json.dumps(request), index * 10, index * 10, json.dumps(result)))
+            key = json.dumps(('product', '1688', REQUEST['url'], session), ensure_ascii=False)
+            db.execute('INSERT INTO current_products VALUES (?,?)', (key, identifier))
+
+
+def test_legacy_account_indices_migrate_atomically_and_once(tmp_path, monkeypatch):
+    import sqlite3
+    from app.plugin.infra.crawler.product_jobs import store as module
+    path = tmp_path / 'legacy.db'
+    legacy_session_scoped_database(path)
+    original = module.publish
+    calls = []
+    def interrupted(*args):
+        calls.append(True)
+        if len(calls) == 2:
+            raise RuntimeError('fixture interrupted migration')
+        return original(*args)
+    with monkeypatch.context() as patch:
+        patch.setattr(module, 'publish', interrupted)
+        with pytest.raises(RuntimeError):
+            JobStore(path)
+    with sqlite3.connect(path) as db:
+        assert db.execute('SELECT count(*) FROM current_products').fetchone()[0] == 2
+        assert db.execute('SELECT count(*) FROM jobs WHERE result IS NOT NULL').fetchone()[0] == 2
+    store = JobStore(path)
+    current = store.current_product('product', {'platform': '1688', 'url': REQUEST['url']})
+    assert current['job']['job_id'] == '2' * 32
+    assert current['result']['images'] == ['first-image']
+    assert current['result']['field_collected_at']['images'] == 7
+    assert store.get('product', '1' * 32)['superseded_by'] == '2' * 32
+    with monkeypatch.context() as patch:
+        patch.setattr(module, 'publish', lambda *args: pytest.fail('migration repeated'))
+        reopened = JobStore(path)
+        assert reopened.current_product('product', {'platform': '1688', 'url': REQUEST['url']}) == current

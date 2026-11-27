@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def execute(manager, access, operation):
+    manager.access = access
     platform, account = operation["platform"], operation["account"]
     if operation["kind"] == "check":
         return await manager.check(platform, account), None
@@ -24,10 +25,19 @@ async def execute(manager, access, operation):
         return {"state": "unknown", "reason": "window_busy"}, None
     if not active:
         await manager.command("start", platform, account)
+        active = manager.active
     result = await manager.check(platform, account)
+    if result.get('reason') == 'window_busy':
+        return result, None
     if result["state"] == "unknown":
         result = {"state": "login_required", "reason": "manual_login"}
-    return result, ticket(access.key)
+    async with manager.lock:
+        current = manager.active
+        if (getattr(manager, 'closing', False) or not current or current is not active
+                or (current['platform'], current['account']) != (platform, account)):
+            return {'state': 'unknown', 'reason': 'window_busy'}, None
+        access.begin_window(current)
+        return result, ticket(access.key)
 
 
 async def serve(manager, access):

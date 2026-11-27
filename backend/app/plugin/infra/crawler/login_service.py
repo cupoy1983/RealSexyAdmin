@@ -1,6 +1,7 @@
 """仅供 SSH 转发保护的独立登录容器使用；无业务数据库或后台依赖。"""
 
 import asyncio
+import http.client
 import contextlib
 import json
 import os
@@ -28,6 +29,8 @@ class LoginManager:
         self.lock = asyncio.Lock()
         self.browser = self.context = None
         self.active = None
+        self.access = None
+        self._closing_count = 0
         self.events = []
         self.message = "请选择平台并开始登录"
         self.session_health = SessionHealth(os.environ.get('COLLECTOR_SESSION_HEALTH_DIR', self.directory.parent / 'session-health'))
@@ -174,16 +177,30 @@ class LoginManager:
             except Exception:
                 return {"state": "network_error", "reason": "network_failed"}
 
+    @property
+    def closing(self):
+        return self._closing_count > 0
+
     async def close(self):
+        self._closing_count += 1
+        browser = self.browser
         try:
-            if self.browser is not None:
-                await self.browser.close()
-        finally:
+            if self.access is not None:
+                self.access.close_window()
             self.event("window_closed")
             self.browser = self.context = self.active = None
+            if browser is not None:
+                await browser.close()
+        finally:
+            self.browser = self.context = self.active = None
+            self._closing_count -= 1
 
-    async def command(self, action, platform, account):
+    async def command(self, action, platform, account, *, authorize=None):
         async with self.lock:
+            if self.closing:
+                raise ValueError('登录窗口正在关闭，请稍后重新申请入口')
+            if authorize is not None:
+                authorize()
             store = self.store(platform, account)
             if self.active and self.active["expires_at"] <= time.time():
                 await self.close()
@@ -222,6 +239,8 @@ class LoginManager:
                     await self.context.route("**/*", route)
                     self.events = []
                     self.active = {"platform": platform, "account": account, "expires_at": time.time() + 900, "diagnostic_ref": uuid4().hex}
+                    if self.access is not None:
+                        self.access.begin_window(self.active)
                     page = await self.context.new_page()
                     await page.goto(site["url"], wait_until="domcontentloaded", timeout=60000)
                 except BaseException as error:
@@ -254,6 +273,8 @@ class LoginManager:
 
 
 def handler(manager, loop, access=None, session_api=None, registry=None):
+    if access is not None:
+        manager.access = access
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -301,10 +322,34 @@ def handler(manager, loop, access=None, session_api=None, registry=None):
                 return self.reply(503, {'code': 503, 'msg': 'service_unavailable', 'data': None})
 
         def do_GET(self):
+            if urlsplit(self.path).path == '/vnc' and access is not None:
+                scheme = self.headers.get('X-Forwarded-Proto', 'http')
+                if scheme not in {'http', 'https'} or self.headers.get('Origin') != scheme + '://' + self.headers.get('Host', ''):
+                    return self.reply(403, {'error': '请求来源无效'})
+                from .login_websocket import relay
+                return relay(self, access)
             if self.path.startswith('/v1/sessions/'):
                 return self.shared_request()
-            if self.path == "/diagnostics":
-                return self.reply(200, {"active": manager.active, "events": manager.events})
+            if self.path in {'/status', '/diagnostics'} and access is not None:
+                if not access.authorized_window(self.headers.get('Cookie'), self.headers.get('X-Collector-Window')):
+                    return self.reply(401, {'error': '窗口授权已结束，请重新申请入口'})
+            if self.path in {'/status', '/diagnostics'}:
+                async def read_status():
+                    async with manager.lock:
+                        if access is not None and not access.authorized_window(self.headers.get('Cookie'), self.headers.get('X-Collector-Window')):
+                            raise ValueError('窗口授权已结束，请重新申请入口')
+                        if self.path == '/diagnostics':
+                            return {'active': dict(manager.active) if manager.active else None, 'events': list(manager.events)}
+                        return manager.status()
+                future = asyncio.run_coroutine_threadsafe(read_status(), loop)
+                try:
+                    result = future.result(timeout=5)
+                except ValueError:
+                    return self.reply(401, {'error': '窗口授权已结束，请重新申请入口'})
+                except TimeoutError:
+                    future.cancel()
+                    return self.reply(503, {'error': '窗口状态暂不可用，请稍后重试'})
+                return self.reply(200, result)
             if self.path == "/entry" and access is not None:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -314,13 +359,7 @@ def handler(manager, loop, access=None, session_api=None, registry=None):
                 return
             if self.path == "/authorize" and access is not None:
                 return self.reply(200 if access.authorized(self.headers.get("Cookie")) else 401, {})
-            if self.path != "/status":
-                return self.reply(404, {"error": "not_found"})
-
-            async def status():
-                return manager.status()
-
-            self.reply(200, asyncio.run_coroutine_threadsafe(status(), loop).result(timeout=5))
+            return self.reply(404, {"error": "not_found"})
 
         def do_POST(self):
             if self.path.startswith('/v1/sessions/'):
@@ -333,19 +372,69 @@ def handler(manager, loop, access=None, session_api=None, registry=None):
                 size = int(self.headers.get("Content-Length", "0"))
                 if not 0 < size <= 4096:
                     raise ValueError("请求大小无效")
-                body = json.loads(self.rfile.read(size))
+                raw = self.rfile.read(size)
+                body = json.loads(raw)
                 if self.path == "/exchange" and access is not None:
                     session = access.exchange(body.get("access"))
+                    payload = json.dumps({'window_id': access.browser_window('collector_login=' + session)}).encode('utf-8')
                     self.send_response(200)
                     secure = "; Secure" if scheme == "https" else ""
                     self.send_header("Set-Cookie", f"collector_login={session}; Path=/; HttpOnly; SameSite=Strict; Max-Age=3600{secure}")
                     self.send_header("Cache-Control", "no-store")
-                    self.send_header("Content-Length", "0")
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
+                    self.wfile.write(payload)
                     return
+                if self.path == '/clipboard' and access is not None:
+                    async def clipboard():
+                        async with manager.lock:
+                            window_id = self.headers.get('X-Collector-Window')
+                            if manager.closing or not manager.active or not access.authorized_window(self.headers.get('Cookie'), window_id):
+                                raise ValueError('窗口授权已结束，请重新申请入口')
+                            def forward():
+                                connection = http.client.HTTPConnection('127.0.0.1', 6082, timeout=5)
+                                try:
+                                    connection.request('POST', '/clipboard', raw, headers={
+                                        'Host': host, 'Origin': 'http://' + host, 'Content-Type': 'application/json'})
+                                    response = connection.getresponse()
+                                    data = response.read(4097)
+                                    if response.status != 200 or len(data) > 4096:
+                                        raise ValueError('中文剪贴板发送失败')
+                                    return json.loads(data)
+                                finally:
+                                    connection.close()
+                            transfer = asyncio.create_task(asyncio.to_thread(forward))
+                            try:
+                                return await asyncio.shield(transfer)
+                            except asyncio.CancelledError:
+                                # Cancelling to_thread does not stop its socket IO.
+                                # Keep the window lock until the old transfer ends.
+                                with contextlib.suppress(Exception):
+                                    await transfer
+                                raise
+                    future = asyncio.run_coroutine_threadsafe(clipboard(), loop)
+                    try:
+                        result = future.result(timeout=10)
+                    except TimeoutError:
+                        future.cancel()
+                        raise
+                    return self.reply(200, result)
                 if self.path != "/command" or not isinstance(body, dict):
                     raise ValueError("请求无效")
-                future = asyncio.run_coroutine_threadsafe(manager.command(body["action"], body["platform"], body["account"]), loop)
+                async def command():
+                    grants = []
+                    def authorize():
+                        if access is not None:
+                            window_id = self.headers.get('X-Collector-Window')
+                            if not window_id:
+                                raise ValueError('缺少窗口标识，请重新申请入口')
+                            grants.append(access.start_grant(self.headers.get('Cookie'), scope=(body['platform'], body['account']), window_id=window_id))
+                    result = await manager.command(body['action'], body['platform'], body['account'], authorize=authorize)
+                    if access is not None and body['action'] == 'start':
+                        access.continue_start(grants[0])
+                    return result
+                future = asyncio.run_coroutine_threadsafe(command(), loop)
                 try:
                     result = future.result(timeout=75)
                 except TimeoutError:
