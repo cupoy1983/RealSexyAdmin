@@ -38,7 +38,8 @@ async def request_json(method: str, url: str, system_label: str, **kwargs: Any) 
     - dict: 解析后的 JSON 响应
     """
     timeout = settings.HTTPX_DEFAULT_TIMEOUT
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    # 第三方服务走部署环境直连，不继承启动终端遗留的代理／证书变量。
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         r = await client.request(method, url, **kwargs)
         r.raise_for_status()
         try:
